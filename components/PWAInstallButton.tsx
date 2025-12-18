@@ -46,6 +46,7 @@ export default function PWAInstallButton() {
     // For Android/Desktop - Listen for beforeinstallprompt event
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
+      console.log('[PWA] beforeinstallprompt fired');
       setDeferredPrompt(e as BeforeInstallPromptEvent);
       setShowButton(true);
     };
@@ -54,6 +55,7 @@ export default function PWAInstallButton() {
 
     // Check if app was just installed
     const handleAppInstalled = () => {
+      console.log('[PWA] App installed');
       setIsInstalled(true);
       setShowButton(false);
       setDeferredPrompt(null);
@@ -61,41 +63,33 @@ export default function PWAInstallButton() {
 
     window.addEventListener('appinstalled', handleAppInstalled);
 
-    // For Android, also show button after a delay even if beforeinstallprompt hasn't fired
-    // This helps in cases where the event is delayed
-    const showTimeout = setTimeout(() => {
-      if (!isIOSDevice) {
-        setShowButton(true);
-      }
-    }, 2000);
-
     return () => {
-      clearTimeout(showTimeout);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
   const handleInstallClick = async () => {
-    // iOS - show instructions modal
+    // iOS - show instructions modal (no native install API)
     if (isIOS) {
       setShowIOSModal(true);
       return;
     }
 
-    // Android/Desktop with deferred prompt
+    // Android/Desktop - trigger native install prompt directly
     if (deferredPrompt) {
-      await deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
+      try {
+        await deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
 
-      if (outcome === 'accepted') {
-        setIsInstalled(true);
-        setShowButton(false);
+        if (outcome === 'accepted') {
+          setIsInstalled(true);
+          setShowButton(false);
+        }
+      } catch (error) {
+        console.error('Install prompt error:', error);
       }
       setDeferredPrompt(null);
-    } else {
-      // Show a message if no prompt available
-      alert('Para ma-install ang PadBuddy:\n\n1. I-tap ang menu button (⋮) sa browser\n2. Piliin ang "Install app" o "Add to Home screen"');
     }
   };
 
