@@ -480,6 +480,50 @@ export default function DeviceDetail() {
     
     fetchDeviceInfo();
   }, [user, deviceId]);
+
+  // Fetch GPS location data for device status card
+  useEffect(() => {
+    const fetchGPSData = async () => {
+      if (!deviceId) return;
+      
+      try {
+        const gpsRef = ref(database, `devices/${deviceId}/gps`);
+        const snapshot = await get(gpsRef);
+        
+        if (snapshot.exists()) {
+          const gps = snapshot.val();
+          setGpsData(gps);
+        } else {
+          // Try location path as fallback
+          const locationRef = ref(database, `devices/${deviceId}/location`);
+          const locationSnapshot = await get(locationRef);
+          
+          if (locationSnapshot.exists()) {
+            const location = locationSnapshot.val();
+            setGpsData({
+              lat: location.latitude ?? location.lat,
+              lng: location.longitude ?? location.lng,
+              ts: location.timestamp,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching GPS data:', error);
+      }
+    };
+    
+    fetchGPSData();
+    
+    // Set up real-time listener for GPS updates
+    const gpsRef = ref(database, `devices/${deviceId}/gps`);
+    const unsubscribe = onValue(gpsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setGpsData(snapshot.val());
+      }
+    });
+    
+    return () => unsubscribe();
+  }, [deviceId]);
   
   // Historical logs are now handled via real-time snapshot listeners above
   
@@ -684,6 +728,23 @@ export default function DeviceDetail() {
                 <span className="text-gray-600">Device ID</span>
                 <span className="font-medium text-gray-900">{deviceId}</span>
               </div>
+              {gpsData && gpsData.lat && gpsData.lng && (
+                <div className="flex justify-between py-2 border-b border-gray-100">
+                  <span className="text-gray-600 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Location
+                  </span>
+                  <button
+                    onClick={handleViewLocation}
+                    className="font-medium text-green-600 hover:text-green-700 hover:underline text-sm"
+                  >
+                    {gpsData.lat?.toFixed(5)}, {gpsData.lng?.toFixed(5)}
+                  </button>
+                </div>
+              )}
               <div className="flex justify-between py-2 border-b border-gray-100">
                 <span className="text-gray-600">Last Update</span>
                 <span className="font-medium text-gray-900">{deviceStatus.lastUpdate}</span>
