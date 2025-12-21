@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { database } from '@/lib/firebase';
-import { ref, set, serverTimestamp } from 'firebase/database';
+import { ref, set } from 'firebase/database';
 
 export default function CreateRTDBDevices() {
   const [status, setStatus] = useState<string>('');
