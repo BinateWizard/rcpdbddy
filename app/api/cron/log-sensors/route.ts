@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
-import { getFirestore, Firestore } from 'firebase-admin/firestore';
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getFirestore, Firestore, FieldValue } from 'firebase-admin/firestore';
 import { getDatabase, Database } from 'firebase-admin/database';
 
 // Initialize Firebase Admin (server-side only)
@@ -35,8 +35,16 @@ try {
  */
 export async function GET(request: NextRequest) {
   // Verify this is a legitimate cron request
+  // Vercel automatically sends 'x-vercel-cron' header for cron jobs
+  // Also check for manual authorization if CRON_SECRET is set
+  const vercelCronHeader = request.headers.get('x-vercel-cron');
   const authHeader = request.headers.get('authorization');
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  
+  // Allow if it's from Vercel cron OR if it has the correct secret
+  const isVercelCron = vercelCronHeader === '1';
+  const hasValidSecret = process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`;
+  
+  if (!isVercelCron && !hasValidSecret) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -106,13 +114,13 @@ export async function GET(request: NextRequest) {
           phosphorus,
           potassium,
           deviceTimestamp: deviceTimestamp ?? null,
-          timestamp: new Date(),
+          timestamp: FieldValue.serverTimestamp(),
           createdAt: new Date().toISOString(),
           source: 'vercel-cron',
         };
 
         const writes: Promise<any>[] = [];
-        paddiesSnapshot.forEach((paddyDoc) => {
+        paddiesSnapshot.forEach((paddyDoc: any) => {
           const logsCol = paddyDoc.ref.collection('logs');
           
           // Check if we already logged this reading (deduplication)
@@ -122,10 +130,21 @@ export async function GET(request: NextRequest) {
               .orderBy('timestamp', 'desc')
               .limit(1)
               .get()
-              .then((lastLogSnapshot) => {
+              .then(async (lastLogSnapshot: any) => {
                 if (!lastLogSnapshot.empty) {
                   const lastLog = lastLogSnapshot.docs[0].data();
-                  const lastLogTime = lastLog.timestamp?.toDate?.()?.getTime() || lastLog.timestamp?.getTime() || 0;
+                  // Handle Firestore Timestamp
+                  let lastLogTime = 0;
+                  if (lastLog.timestamp) {
+                    if (lastLog.timestamp.toDate) {
+                      lastLogTime = lastLog.timestamp.toDate().getTime();
+                    } else if (lastLog.timestamp.getTime) {
+                      lastLogTime = lastLog.timestamp.getTime();
+                    } else if (typeof lastLog.timestamp === 'number') {
+                      lastLogTime = lastLog.timestamp;
+                    }
+                  }
+                  
                   const currentTime = deviceTimestamp || Date.now();
                   
                   // Skip if same values logged within last 5 minutes
@@ -133,6 +152,7 @@ export async function GET(request: NextRequest) {
                     lastLog.nitrogen === nitrogen &&
                     lastLog.phosphorus === phosphorus &&
                     lastLog.potassium === potassium &&
+                    lastLogTime > 0 &&
                     (currentTime - lastLogTime) < 5 * 60 * 1000
                   ) {
                     return null; // Skip duplicate
