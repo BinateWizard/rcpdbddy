@@ -7,97 +7,142 @@ admin.initializeApp({
 });
 
 /**
- * RTDB → Firestore logging
- * Listens to sensor updates under /devices/{deviceId}/sensors and writes
- * a time-series log entry to Firestore for trend analysis.
- *
- * RTDB is kept lean (current state via PUT); history is stored in Firestore.
+ * Scheduled function: Auto-log sensor readings every 5 minutes
+ * 
+ * This runs independently of your Vercel app and works 24/7.
+ * It checks all devices in RTDB and logs new readings to Firestore.
  */
-export const logDeviceSensorUpdates = functions.database
-  .ref("/devices/{deviceId}/{dataNode}")
-  .onWrite(async (change, context) => {
-    const deviceId = context.params.deviceId as string;
-    const dataNode = (context.params as any).dataNode as string;
-
-    // Only react to sensor-like nodes
-    const allowedNodes = new Set(["sensors", "npk", "readings"]);
-    if (!allowedNodes.has(dataNode)) {
-      return null;
-    }
-
-    const after = change.after.exists() ? change.after.val() : null;
-    const before = change.before.exists() ? change.before.val() : null;
-
-    if (!after) {
-      // Deleted node; nothing to log
-      return null;
-    }
-
-    // Normalize readings (support multiple field names and casings)
-    const nitrogen = after.nitrogen ?? after.n ?? after.N ?? null;
-    const phosphorus = after.phosphorus ?? after.p ?? after.P ?? null;
-    const potassium = after.potassium ?? after.k ?? after.K ?? null;
-    const deviceTimestamp = after.lastUpdate ?? after.timestamp ?? after.ts ?? null;
-
-    // Skip if no actual readings present
-    if (nitrogen === null && phosphorus === null && potassium === null) {
-      return null;
-    }
-
-    // Basic dedup: only log if values or timestamp changed
-    const changed = !before ||
-      before?.nitrogen !== nitrogen ||
-      before?.phosphorus !== phosphorus ||
-      before?.potassium !== potassium ||
-      before?.lastUpdate !== deviceTimestamp ||
-      before?.timestamp !== deviceTimestamp ||
-      before?.ts !== deviceTimestamp;
-
-    if (!changed) {
-      return null;
-    }
-
+export const scheduledSensorLogger = functions.pubsub
+  .schedule('*/5 * * * *')  // Cron expression: every 5 minutes
+  .timeZone('Asia/Manila')  // Set timezone (adjust if needed)
+  .onRun(async (context) => {
+    console.log('[Scheduled] Starting sensor logging job...');
+    
     const firestore = admin.firestore();
-    const logPayload = {
-      nitrogen,
-      phosphorus,
-      potassium,
-      deviceTimestamp: deviceTimestamp ?? null,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      source: `rtdb-trigger:${dataNode}`,
-    };
-
+    const database = admin.database();
+    
     try {
-      // Find paddies bound to this device via collection group query
-        console.log("[logDeviceSensorUpdates] deviceId=", deviceId, "node=", dataNode, "payload=", { nitrogen, phosphorus, potassium, deviceTimestamp });
-      const paddiesSnapshot = await firestore
-        .collectionGroup("paddies")
-        .where("deviceId", "==", deviceId)
-        .get();
-
-      if (!paddiesSnapshot.empty) {
-          console.log("[logDeviceSensorUpdates] Found paddies:", paddiesSnapshot.size);
-        // Write logs under each matched paddy
-        const writes: Promise<FirebaseFirestore.DocumentReference>[] = [];
-        paddiesSnapshot.forEach((paddyDoc) => {
-          const logsCol = paddyDoc.ref.collection("logs");
-          writes.push(logsCol.add(logPayload));
-        });
-        await Promise.all(writes);
-      } else {
-          console.log("[logDeviceSensorUpdates] No paddies found for device; writing to fallback deviceLogs.");
-        // Fallback: write logs under a device-centric path for visibility
-        await firestore
-          .collection("deviceLogs")
-          .doc(deviceId)
-          .collection("readings")
-          .add(logPayload);
+      // Get all devices from RTDB
+      const devicesRef = database.ref('devices');
+      const devicesSnapshot = await devicesRef.once('value');
+      
+      if (!devicesSnapshot.exists()) {
+        console.log('[Scheduled] No devices found in RTDB');
+        return null;
       }
 
-      return null;
-    } catch (err) {
-      console.error("Error logging RTDB sensor update:", err);
-      return null;
+      const devices = devicesSnapshot.val();
+      let totalLogged = 0;
+
+      // Process each device
+      for (const [deviceId, deviceData] of Object.entries(devices) as [string, any][]) {
+        try {
+          // Get NPK data from device
+          const npk = deviceData.npk || deviceData.sensors || deviceData.readings;
+          
+          if (!npk) {
+            continue; // Skip devices without sensor data
+          }
+
+          // Normalize readings
+          const nitrogen = npk.nitrogen ?? npk.n ?? npk.N ?? null;
+          const phosphorus = npk.phosphorus ?? npk.p ?? npk.P ?? null;
+          const potassium = npk.potassium ?? npk.k ?? npk.K ?? null;
+          const deviceTimestamp = npk.lastUpdate ?? npk.timestamp ?? npk.ts ?? Date.now();
+
+          // Skip if no actual readings
+          if (nitrogen === null && phosphorus === null && potassium === null) {
+            continue;
+          }
+
+          // Find paddies associated with this device
+          const paddiesSnapshot = await firestore
+            .collectionGroup('paddies')
+            .where('deviceId', '==', deviceId)
+            .get();
+
+          if (paddiesSnapshot.empty) {
+            console.log(`[Scheduled] No paddies found for device ${deviceId}`);
+            continue;
+          }
+
+          // Log to each associated paddy (with deduplication check)
+          const logPayload = {
+            nitrogen,
+            phosphorus,
+            potassium,
+            deviceTimestamp: deviceTimestamp ?? null,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            source: 'firebase-scheduled',
+          };
+
+          const writes: Promise<any>[] = [];
+          paddiesSnapshot.forEach((paddyDoc) => {
+            const logsCol = paddyDoc.ref.collection('logs');
+            
+            // Check if we already logged this reading (deduplication)
+            writes.push(
+              logsCol
+                .orderBy('timestamp', 'desc')
+                .limit(1)
+                .get()
+                .then(async (lastLogSnapshot) => {
+                  if (!lastLogSnapshot.empty) {
+                    const lastLog = lastLogSnapshot.docs[0].data();
+                    // Handle Firestore Timestamp properly
+                    let lastLogTime = 0;
+                    if (lastLog.timestamp) {
+                      if (lastLog.timestamp.toDate) {
+                        lastLogTime = lastLog.timestamp.toDate().getTime();
+                      } else if (lastLog.timestamp.getTime) {
+                        lastLogTime = lastLog.timestamp.getTime();
+                      } else if (typeof lastLog.timestamp === 'number') {
+                        lastLogTime = lastLog.timestamp;
+                      }
+                    }
+                    
+                    const currentTime = deviceTimestamp || Date.now();
+                    
+                    // Skip if same values logged within last 5 minutes
+                    if (
+                      lastLog.nitrogen === nitrogen &&
+                      lastLog.phosphorus === phosphorus &&
+                      lastLog.potassium === potassium &&
+                      lastLogTime > 0 &&
+                      (currentTime - lastLogTime) < 5 * 60 * 1000
+                    ) {
+                      return null; // Skip duplicate
+                    }
+                  }
+                  
+                  // Log the reading
+                  return logsCol.add(logPayload);
+                })
+                .catch((error) => {
+                  console.error(`[Scheduled] Error checking/adding log for paddy ${paddyDoc.id}:`, error);
+                  return null;
+                })
+            );
+          });
+
+          const results = await Promise.all(writes);
+          const successful = results.filter(r => r !== null).length;
+          totalLogged += successful;
+
+          if (successful > 0) {
+            console.log(`[Scheduled] Logged ${successful} reading(s) for device ${deviceId}`);
+          }
+        } catch (error: any) {
+          console.error(`[Scheduled] Error processing device ${deviceId}:`, error);
+        }
+      }
+
+      console.log(`[Scheduled] Job completed. Logged ${totalLogged} reading(s) total.`);
+      return { success: true, logged: totalLogged };
+    } catch (error: any) {
+      console.error('[Scheduled] Fatal error:', error);
+      console.error('[Scheduled] Error stack:', error.stack);
+      throw error; // Re-throw to mark function as failed
     }
   });
 
