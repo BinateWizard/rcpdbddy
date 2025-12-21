@@ -110,7 +110,7 @@ export default function Home() {
           
           // Process each paddy and check device status from RTDB
           for (const paddyDoc of paddiesSnapshot.docs) {
-            const paddyData = { id: paddyDoc.id, ...paddyDoc.data() };
+            const paddyData: any = { id: paddyDoc.id, ...paddyDoc.data() };
             paddies.push(paddyData);
             
             fieldTotalDevices++;
