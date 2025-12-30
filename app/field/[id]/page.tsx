@@ -1,10 +1,10 @@
-'use client';
+﻿'use client';
 
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db, database } from '@/lib/firebase';
-import { doc, getDoc, collection, getDocs, updateDoc, setDoc, query, where, orderBy, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, updateDoc, setDoc, query, where, orderBy, onSnapshot, deleteDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { ref, onValue } from 'firebase/database';
 import {
   Chart as ChartJS,
@@ -26,6 +26,15 @@ import { getVarietyByName } from '@/lib/utils/varietyHelpers';
 import { getCurrentStage, getDaysSincePlanting, getExpectedHarvestDate, getGrowthProgress } from '@/lib/utils/stageCalculator';
 import { ACTIVITIES, PRE_PLANTING_ACTIVITIES } from '@/lib/data/activities';
 import { VARIETY_ACTIVITY_TRIGGERS } from '@/lib/data/activityTriggers';
+import { Zap, Moon, RotateCcw, Settings, CheckCircle, TrendingUp } from 'lucide-react';
+import { Search } from 'lucide-react';
+
+// Import tab components
+import { OverviewTab } from './components/OverviewTab';
+import { PaddiesTab } from './components/PaddiesTab';
+import { StatisticsTab } from './components/StatisticsTab';
+import { ControlPanelTab } from './components/ControlPanelTab';
+import { InformationTab } from './components/InformationTab';
 
 /**
  * Log sensor readings to Firestore for historical tracking
@@ -57,10 +66,10 @@ async function logSensorReading(
   }
 ) {
   try {
-    const logRef = doc(collection(db, `users/${userId}/fields/${fieldId}/paddies/${paddyId}/logs`));
-    await setDoc(logRef, {
+    const logsRef = collection(db, `users/${userId}/fields/${fieldId}/paddies/${paddyId}/logs`);
+    await addDoc(logsRef, {
       ...readings,
-      timestamp: new Date(),
+      timestamp: serverTimestamp(),
       createdAt: new Date().toISOString()
     });
     console.log('Sensor reading logged successfully');
@@ -81,7 +90,7 @@ export default function FieldDetail() {
   const [paddies, setPaddies] = useState<any[]>([]);
   const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'paddies' | 'statistics' | 'information'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'paddies' | 'statistics' | 'information' | 'control-panel'>('overview');
   
   // Add device modal state
   const [isAddDeviceModalOpen, setIsAddDeviceModalOpen] = useState(false);
@@ -97,6 +106,17 @@ export default function FieldDetail() {
   const [locationData, setLocationData] = useState<{lat: number; lng: number; timestamp?: any} | null>(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const [otherDevicesHaveLocation, setOtherDevicesHaveLocation] = useState(false);
+  
+  // Header scan state
+  const [isHeaderScanning, setIsHeaderScanning] = useState(false);
+  const [headerScanResult, setHeaderScanResult] = useState<{status: string; message: string; timestamp: number} | null>(null);
+  
+  // Scan modal state
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [scanMode, setScanMode] = useState<"all" | "manual">("all");
+  const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set());
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResults, setScanResults] = useState<{[deviceId: string]: {status: string; message: string}}>({});
   
   // Format time ago
   const getTimeAgo = (timestamp: any) => {
@@ -124,6 +144,194 @@ export default function FieldDetail() {
   // });
 
   const hasDevices = paddies.length > 0;
+
+  // Handle scan button click - open modal
+  const handleScanButtonClick = () => {
+    if (paddies.length === 0) {
+      alert('No paddies connected to scan');
+      return;
+    }
+    setIsScanModalOpen(true);
+    setScanMode('all');
+    setSelectedDevices(new Set());
+    setScanResults({});
+  };
+
+  // Handle scan devices execution
+  const handleScanDevices = async () => {
+    const devicesToScan = scanMode === 'all' 
+      ? paddies.map(p => p.deviceId)
+      : paddies.filter(p => selectedDevices.has(p.id)).map(p => p.deviceId);
+
+    if (devicesToScan.length === 0) {
+      alert('Please select at least one device to scan');
+      return;
+    }
+
+    setIsScanning(true);
+    setScanResults({});
+
+    try {
+      const { executeDeviceAction } = await import('@/lib/utils/deviceActions');
+      const { ref, get } = await import('firebase/database');
+      
+      const scanPromises = devicesToScan.map(async (deviceId) => {
+        try {
+          // Execute scan on device
+          await executeDeviceAction(deviceId, 'scan', 15000);
+          
+          // Fetch NPK data from RTDB after successful scan
+          const npkRef = ref(database, `devices/${deviceId}/npk`);
+          const npkSnap = await get(npkRef);
+          
+          if (npkSnap.exists()) {
+            const npkData = npkSnap.val();
+            return {
+              deviceId,
+              npk: {
+                n: npkData.n,
+                p: npkData.p,
+                k: npkData.k
+              },
+              timestamp: npkData.timestamp
+            };
+          }
+          return { deviceId, npk: null };
+        } catch (err) {
+          return {
+            error: true,
+            deviceId,
+            message: (err as any).message
+          };
+        }
+      });
+
+      const results = await Promise.all(scanPromises);
+      const newResults: {[deviceId: string]: {status: string; message: string; npk?: any}} = {};
+
+      results.forEach((result: any) => {
+        const paddy = paddies.find(p => p.deviceId === result.deviceId);
+        const paddyId = paddy?.id || result.deviceId;
+        
+        if (result.error) {
+          newResults[paddyId] = {
+            status: 'error',
+            message: `âœ— ${result.message || 'Scan failed'}`
+          };
+        } else if (result.npk) {
+          newResults[paddyId] = {
+            status: 'success',
+            message: `âœ“ N: ${result.npk.n} | P: ${result.npk.p} | K: ${result.npk.k}`,
+            npk: result.npk
+          };
+        } else {
+          newResults[paddyId] = {
+            status: 'success',
+            message: `âœ“ Scan completed (no NPK data)`
+          };
+        }
+      });
+
+      setScanResults(newResults);
+
+      // Auto-close modal after 4 seconds if all successful
+      const allSuccessful = Object.values(newResults).every(r => r.status === 'success');
+      if (allSuccessful) {
+        setTimeout(() => {
+          closeScanModal();
+        }, 4000);
+      }
+    } catch (error: any) {
+      console.error('Scan error:', error);
+      alert('Failed to scan devices');
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const closeScanModal = async () => {
+    // Reset action to "none" for all paddies when closing
+    const { resetDeviceAction } = await import('@/lib/utils/deviceActions');
+    for (const paddy of paddies) {
+      try {
+        await resetDeviceAction(paddy.deviceId);
+      } catch (error) {
+        console.error(`Error resetting action for ${paddy.deviceId}:`, error);
+      }
+    }
+    
+    setIsScanModalOpen(false);
+    setTimeout(() => {
+      setScanMode('all');
+      setSelectedDevices(new Set());
+      setScanResults({});
+    }, 300);
+  };
+
+  // Handle scan all devices (old function - for compatibility)
+  const handleScanAllDevices = async () => {
+    if (paddies.length === 0) {
+      alert('No paddies connected to scan');
+      return;
+    }
+
+    setIsHeaderScanning(true);
+    setHeaderScanResult(null);
+
+    try {
+      const { executeDeviceAction } = await import('@/lib/utils/deviceActions');
+      const scanPromises = paddies.map(paddy => 
+        executeDeviceAction(paddy.deviceId, 'scan', 15000).catch(err => ({
+          error: true,
+          paddyId: paddy.id,
+          message: err.message
+        }))
+      );
+
+      const results = await Promise.all(scanPromises);
+      const failures = results.filter(r => (r as any).error);
+      const successes = results.filter(r => !(r as any).error);
+
+      if (successes.length === paddies.length) {
+        setHeaderScanResult({
+          status: 'success',
+          message: `âœ“ All ${paddies.length} device${paddies.length > 1 ? 's' : ''} scanned successfully`,
+          timestamp: Date.now()
+        });
+      } else if (failures.length === paddies.length) {
+        setHeaderScanResult({
+          status: 'error',
+          message: `âœ— Failed to scan all devices`,
+          timestamp: Date.now()
+        });
+      } else {
+        setHeaderScanResult({
+          status: 'partial',
+          message: `âš  Scanned ${successes.length}/${paddies.length} devices`,
+          timestamp: Date.now()
+        });
+
+      }
+
+      // Clear result after 5 seconds
+      setTimeout(() => {
+        setHeaderScanResult(null);
+      }, 5000);
+    } catch (error: any) {
+      console.error('Scan error:', error);
+      setHeaderScanResult({
+        status: 'error',
+        message: `âœ— Scan failed: ${error?.message || 'Unknown error'}`,
+        timestamp: Date.now()
+      });
+
+      setTimeout(() => {
+        setHeaderScanResult(null);
+      }, 5000);
+    } finally {
+      setIsHeaderScanning(false);
+    }
+  };
 
   useEffect(() => {
     const fetchFieldData = async () => {
@@ -398,18 +606,52 @@ export default function FieldDetail() {
                 <span className="font-bold text-gray-900">{field.fieldName}</span>
               </div>
               
-              {/* Field Status Badge */}
-              {field.status === 'harvested' && (
-                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                  🌾 Harvested
-                </span>
-              )}
-              {field.status === 'concluded' && (
-                <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                  🔚 Season Ended
-                </span>
-              )}
+              {/* Scan Button and Field Status Badge */}
+              <div className="flex items-center gap-2">
+                {paddies.length > 0 && (
+                  <button
+                    onClick={handleScanButtonClick}
+                    disabled={isHeaderScanning}
+                    title={`Scan all ${paddies.length} device${paddies.length > 1 ? 's' : ''}`}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 hover:text-green-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isHeaderScanning ? (
+                      <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    )}
+                    <span className="text-xs font-medium">Scan</span>
+                  </button>
+                )}
+                {field.status === 'harvested' && (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    ðŸŒ¾ Harvested
+                  </span>
+                )}
+                {field.status === 'concluded' && (
+                  <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                    ðŸ”š Season Ended
+                  </span>
+                )}
+              </div>
             </div>
+            {/* Scan Result Feedback */}
+            {headerScanResult && (
+              <div className={`mt-2 px-4 py-3 rounded-lg text-sm font-medium animate-fade-in ${
+                headerScanResult.status === 'success' 
+                  ? 'bg-green-50 text-green-700 border border-green-200'
+                  : headerScanResult.status === 'partial'
+                  ? 'bg-yellow-50 text-yellow-700 border border-yellow-200'
+                  : 'bg-red-50 text-red-700 border border-red-200'
+              }`}>
+                {headerScanResult.message}
+              </div>
+            )}
           </div>
         </nav>
 
@@ -500,6 +742,26 @@ export default function FieldDetail() {
                 activeTab === 'information' ? 'opacity-100' : 'opacity-0 h-0'
               }`}>Info</span>
             </button>
+
+            {/* Control Panel Tab */}
+            <button
+              onClick={() => setActiveTab('control-panel')}
+              className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 ${
+                activeTab === 'control-panel'
+                  ? 'text-green-600'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
+                activeTab === 'control-panel' ? 'bg-green-600' : 'bg-transparent'
+              }`} />
+              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'control-panel' ? 'scale-110' : ''}`} fill={activeTab === 'control-panel' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'control-panel' ? 0 : 2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
+                activeTab === 'control-panel' ? 'opacity-100' : 'opacity-0 h-0'
+              }`}>Control</span>
+            </button>
           </nav>
         </div>
 
@@ -572,6 +834,17 @@ export default function FieldDetail() {
                     fetchUpdatedField();
                   }}
                 />
+              )}
+            </div>
+
+            {/* Control Panel Tab */}
+            <div className={`transition-all duration-300 ease-in-out ${
+              activeTab === 'control-panel' 
+                ? 'opacity-100 translate-y-0' 
+                : 'opacity-0 translate-y-4 absolute inset-0 pointer-events-none'
+            }`}>
+              {activeTab === 'control-panel' && (
+                <ControlPanelTab paddies={paddies} deviceReadings={deviceReadings} fieldId={fieldId} />
               )}
             </div>
           </div>
@@ -827,1896 +1100,188 @@ export default function FieldDetail() {
             </div>
           </>
         )}
-      </div>
-    </ProtectedRoute>
-  );
-}
 
-// Helper function to sanitize stage names for Firebase paths
-const sanitizeStageName = (stageName: string) => {
-  return stageName.replace(/\//g, '-').replace(/\s+/g, '-').toLowerCase();
-};
-
-// Overview Tab Component
-function OverviewTab({ field, paddies }: { field: any; paddies: any[] }) {
-  const { user } = useAuth();
-  const [completedTasks, setCompletedTasks] = useState<{ [key: string]: boolean }>({});
-  const [loadingTasks, setLoadingTasks] = useState(true);
-
-  if (!field) return null;
-
-  const variety = getVarietyByName(field.riceVariety);
-  
-  if (!variety) {
-    return (
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <p className="text-red-600">Rice variety data not found</p>
-      </div>
-    );
-  }
-  
-  const daysSincePlanting = getDaysSincePlanting(field.startDay);
-  const plantingMethod = field.plantingMethod || 'transplant'; // Default to transplant for backward compatibility
-  const currentStage = getCurrentStage(variety, daysSincePlanting);
-  const expectedHarvest = getExpectedHarvestDate(field.startDay, variety);
-  const progress = getGrowthProgress(variety, daysSincePlanting);
-
-  // Get pre-planting activities for transplant method (negative days before transplant)
-  const prePlantingActivities = plantingMethod === 'transplant' 
-    ? PRE_PLANTING_ACTIVITIES.map(activity => ({
-        ...activity,
-        day: activity.day, // Keep negative days for pre-planting
-        _isPrePlanting: true
-      }))
-    : [];
-
-  // Get variety-specific activities for current day and upcoming activities
-  const regularActivities = variety.activities
-    .filter(activity => 
-      activity.day >= daysSincePlanting && 
-      activity.day <= (currentStage?.endDay || daysSincePlanting + 7)
-    )
-    .sort((a, b) => a.day - b.day);
-
-  // Combine pre-planting and regular activities
-  // For pre-planting: show all pre-planting activities if transplant method is selected
-  // They will be marked as past if daysSincePlanting > 0 (transplant already happened)
-  const allActivities = [
-    ...(plantingMethod === 'transplant' ? prePlantingActivities : []),
-    ...regularActivities
-  ].sort((a, b) => a.day - b.day);
-
-  // Filter to show relevant activities (pre-planting + current/upcoming regular activities)
-  // Show pre-planting activities if transplant method, and regular activities based on current day
-  const currentAndUpcomingActivities = allActivities.filter(activity => {
-    const isPrePlanting = (activity as any)._isPrePlanting;
-    
-    if (isPrePlanting) {
-      // Always show pre-planting activities for transplant method (they'll be marked as past if applicable)
-      return true;
-    } else {
-      // Show regular activities that are current or upcoming
-      return activity.day >= daysSincePlanting && 
-             activity.day <= (currentStage?.endDay || daysSincePlanting + 7);
-    }
-  }).sort((a, b) => a.day - b.day);
-
-  const varietyTriggers = VARIETY_ACTIVITY_TRIGGERS[field.riceVariety] || [];
-  const currentTriggers = varietyTriggers.filter(t => t.stage === currentStage?.name);
-
-  // Load completed tasks from Firestore
-  useEffect(() => {
-    const loadCompletedTasks = async () => {
-      if (!user || !field.id || !currentStage) {
-        setLoadingTasks(false);
-        return;
-      }
-      
-      try {
-        const sanitizedStageName = sanitizeStageName(currentStage.name);
-        const tasksPath = `users/${user.uid}/fields/${field.id}/tasks/${sanitizedStageName}`;
-        console.log('Loading tasks from:', tasksPath);
-        const tasksRef = doc(db, 'users', user.uid, 'fields', field.id, 'tasks', sanitizedStageName);
-        const tasksSnap = await getDoc(tasksRef);
-        
-        if (tasksSnap.exists()) {
-          console.log('Tasks loaded successfully');
-          setCompletedTasks(tasksSnap.data().completed || {});
-        } else {
-          console.log('No existing tasks document found (this is normal for first time)');
-        }
-      } catch (error: any) {
-        console.error('Error loading tasks:', error);
-        console.error('Error code:', error?.code);
-        if (error?.code === 'permission-denied') {
-          console.error('PERMISSION DENIED: Check Firestore rules for tasks subcollection');
-        }
-      } finally {
-        setLoadingTasks(false);
-      }
-    };
-
-    loadCompletedTasks();
-  }, [user, field.id, currentStage?.name]);
-
-  // Toggle task completion
-  const toggleTask = async (taskKey: string) => {
-    if (!user || !field.id || !currentStage) return;
-
-    const newCompletedTasks = {
-      ...completedTasks,
-      [taskKey]: !completedTasks[taskKey]
-    };
-
-    setCompletedTasks(newCompletedTasks);
-
-    try {
-      const sanitizedStageName = sanitizeStageName(currentStage.name);
-      const tasksRef = doc(db, 'users', user.uid, 'fields', field.id, 'tasks', sanitizedStageName);
-      await setDoc(tasksRef, {
-        completed: newCompletedTasks,
-        updatedAt: new Date()
-      }, { merge: true });
-    } catch (error) {
-      console.error('Error saving task:', error);
-      // Revert on error
-      setCompletedTasks(completedTasks);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Growth Progress Bar */}
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold text-gray-900">Growth Progress</h2>
-          <div className="text-right">
-            <p className="text-sm text-gray-600">Expected Harvest</p>
-            <p className="text-lg font-semibold text-gray-900">
-              {new Date(expectedHarvest).toLocaleDateString()}
-            </p>
-          </div>
-        </div>
-        
-        {/* Simple Progress Bar */}
-        <div className="mb-2">
-          <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-green-500 to-green-600 rounded-full transition-all duration-500"
-              style={{ width: `${progress}%` }}
+        {/* Scan Devices Modal */}
+        {isScanModalOpen && (
+          <>
+            {/* Glassmorphism Overlay */}
+            <div 
+              onClick={closeScanModal}
+              className="fixed inset-0 backdrop-blur-sm bg-black/20 z-40 transition-all"
             />
-          </div>
-        </div>
-
-        {/* Days Counter - Smaller */}
-        <div className="flex justify-end mb-4">
-          <div className="text-right">
-            <p className="text-lg font-bold text-green-600">
-              {daysSincePlanting} / {variety.maturityDays.max || 130}
-            </p>
-            <p className="text-xs text-gray-500">days</p>
-          </div>
-        </div>
-
-        {/* Current Stage - Below Progress Bar */}
-        {currentStage && (
-          <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-3 h-3 bg-green-600 rounded-full animate-pulse" />
-              <h3 className="font-semibold text-green-900">Current Stage: {currentStage.name}</h3>
-            </div>
-            <p className="text-sm text-green-800">
-              Day {currentStage.startDay} - {currentStage.endDay} of growth cycle
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Activities & Tasks */}
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Activities & Tasks</h2>
-        
-        {/* Variety-Specific Triggers */}
-        {currentTriggers.length > 0 && (
-          <div className="mb-6">
-            <h3 className="text-sm font-semibold text-gray-700 mb-3">Variety-Specific Notes</h3>
-            <div className="space-y-2">
-              {currentTriggers.map((trigger, index) => (
-                <div
-                  key={index}
-                  className={`p-3 rounded-lg border ${
-                    trigger.type === 'warning' ? 'bg-red-50 border-red-200' :
-                    trigger.type === 'precaution' ? 'bg-yellow-50 border-yellow-200' :
-                    trigger.type === 'optional' ? 'bg-blue-50 border-blue-200' :
-                    'bg-gray-50 border-gray-200'
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    <span className="text-lg">
-                      {trigger.type === 'warning' ? '⚠️' :
-                       trigger.type === 'precaution' ? '⚡' :
-                       trigger.type === 'optional' ? '💡' : '👀'}
-                    </span>
-                    <p className="text-sm text-gray-800">{trigger.message}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Variety-Specific Activities */}
-        {currentAndUpcomingActivities.length > 0 ? (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-gray-700">
-                {daysSincePlanting < 0 ? 'Pre-Planting & Upcoming Activities' : 
-                 daysSincePlanting === 0 ? 'Today & Upcoming Activities' :
-                 'Activities & Tasks'}
-              </h3>
-              <span className="text-xs text-gray-500">
-                {Object.values(completedTasks).filter(Boolean).length} / {currentAndUpcomingActivities.length} completed
-              </span>
-            </div>
-            {currentAndUpcomingActivities.map((activity, index) => {
-              const taskKey = `day-${activity.day}-${index}`;
-              const isCompleted = Boolean(completedTasks[taskKey]);
-              const isPrePlanting = (activity as any)._isPrePlanting;
-              const daysDiff = activity.day - daysSincePlanting;
-              const isPast = daysDiff < 0;
-              const isToday = daysDiff === 0;
-              
-              // For pre-planting activities, show days before transplant
-              const displayDay = isPrePlanting 
-                ? `${Math.abs(activity.day)} days before transplant`
-                : activity.day;
-              
-              return (
-                <div 
-                  key={index} 
-                  className={`flex items-start gap-3 p-3 rounded-lg transition-colors cursor-pointer ${
-                    isCompleted 
-                      ? 'bg-green-50 hover:bg-green-100 border border-green-200' 
-                      : isToday 
-                      ? 'bg-yellow-50 hover:bg-yellow-100 border border-yellow-300'
-                      : isPrePlanting
-                      ? 'bg-purple-50 hover:bg-purple-100 border border-purple-200'
-                      : 'bg-gray-50 hover:bg-gray-100'
-                  }`}
-                  onClick={() => !loadingTasks && toggleTask(taskKey)}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isCompleted}
-                    onChange={() => toggleTask(taskKey)}
-                    onClick={(e) => e.stopPropagation()}
-                    disabled={loadingTasks}
-                    className="mt-1 w-5 h-5 text-green-600 rounded focus:ring-green-500 cursor-pointer disabled:opacity-50"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                        isToday ? 'bg-yellow-200 text-yellow-900' :
-                        isPast ? 'bg-red-100 text-red-700' :
-                        isPrePlanting && isPast ? 'bg-purple-100 text-purple-700' :
-                        isPrePlanting ? 'bg-purple-200 text-purple-900' :
-                        'bg-blue-100 text-blue-700'
-                      }`}>
-                        {isToday ? 'TODAY' : 
-                         isPrePlanting && isPast ? `${displayDay} (completed)` :
-                         isPrePlanting ? displayDay :
-                         isPast ? `Day ${activity.day} (${Math.abs(daysDiff)} days ago)` : 
-                         `Day ${activity.day} (in ${daysDiff} days)`}
-                      </span>
-                      {activity.type && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-gray-200 text-gray-700 capitalize">
-                          {activity.type.replace('-', ' ')}
-                        </span>
-                      )}
-                      {isPrePlanting && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">
-                          Pre-Planting
-                        </span>
-                      )}
-                    </div>
-                    <p className={`font-medium ${isCompleted ? 'text-gray-500 line-through' : 'text-gray-900'}`}>
-                      {activity.action}
-                    </p>
-                    <div className="mt-2 space-y-1">
-                      {activity.water && (
-                        <p className={`text-sm ${isCompleted ? 'text-gray-400' : 'text-blue-700'}`}>
-                          💧 {activity.water}
-                        </p>
-                      )}
-                      {activity.fertilizer && (
-                        <p className={`text-sm ${isCompleted ? 'text-gray-400' : 'text-green-700'}`}>
-                          🌾 {activity.fertilizer}
-                        </p>
-                      )}
-                      {activity.notes && (
-                        <p className={`text-sm ${isCompleted ? 'text-gray-400' : 'text-gray-600'}`}>
-                          ℹ️ {activity.notes}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-gray-500 text-center py-8">No upcoming activities</p>
-        )}
-      </div>
-
-      {/* Growth Stages */}
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Growth Stages</h2>
-        <div className="space-y-2">
-          {variety?.growthStages?.map((stage, index) => {
-            const isPassed = daysSincePlanting > stage.endDay;
-            const isCurrent = daysSincePlanting >= stage.startDay && daysSincePlanting <= stage.endDay;
             
-            return (
-              <div
-                key={index}
-                className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
-                  isCurrent ? 'bg-green-50 border-green-300' :
-                  isPassed ? 'bg-gray-50 border-gray-200' :
-                  'bg-white border-gray-200'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-3 h-3 rounded-full ${
-                      isPassed ? 'bg-green-600' :
-                      isCurrent ? 'bg-green-600 animate-pulse' :
-                      'bg-gray-300'
-                    }`}
-                  />
-                  <span className={`font-medium ${
-                    isCurrent ? 'text-green-900' : 'text-gray-900'
-                  }`}>
-                    {stage.name}
-                  </span>
-                </div>
-                <span className="text-sm text-gray-600">
-                  {stage.startDay}-{stage.endDay} days
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Helper function to check device status
-function getDeviceStatus(paddy: any, deviceReadings: any[]) {
-  const deviceReading = deviceReadings.find(r => r.deviceId === paddy.deviceId);
-  
-  if (!deviceReading) {
-    return {
-      status: 'offline',
-      message: 'Device is offline. Check power supply and network connection.',
-      color: 'red',
-      badge: 'Offline'
-    };
-  }
-  
-  const deviceStatus = deviceReading.status || 'disconnected';
-  const hasNPK = deviceReading.npk && (
-    deviceReading.npk.n !== undefined || 
-    deviceReading.npk.p !== undefined || 
-    deviceReading.npk.k !== undefined
-  );
-  
-  // Check if device has recent NPK timestamp (within last 10 minutes)
-  let hasRecentNPK = false;
-  if (deviceReading.npk?.timestamp) {
-    const npkTimestamp = deviceReading.npk.timestamp;
-    // Handle both seconds and milliseconds timestamps
-    const npkTime = npkTimestamp < 10000000000 ? npkTimestamp * 1000 : npkTimestamp;
-    const timeSinceNPK = Date.now() - npkTime;
-    hasRecentNPK = timeSinceNPK < 10 * 60 * 1000; // 10 minutes
-  }
-  
-  // Device is online if:
-  // 1. Status is 'connected' or 'alive' (ESP32 sends 'alive')
-  // 2. OR has recent NPK readings (within 10 minutes)
-  const isOnline = deviceStatus === 'connected' || 
-                   deviceStatus === 'alive' || 
-                   hasRecentNPK;
-  
-  if (!isOnline) {
-    return {
-      status: 'offline',
-      message: 'Device is offline. Check power supply and network connection.',
-      color: 'red',
-      badge: 'Offline'
-    };
-  }
-  
-  if (isOnline && !hasNPK) {
-    return {
-      status: 'sensor-issue',
-      message: 'Device is online but sensors are not reporting data. Check sensor connections.',
-      color: 'yellow',
-      badge: 'Sensor Issue'
-    };
-  }
-  
-  return {
-    status: 'ok',
-    message: 'Device and sensors are working properly.',
-    color: 'green',
-    badge: 'Connected'
-  };
-}
-
-// Paddies Tab Component
-function PaddiesTab({ paddies, deviceReadings, fieldId, onAddDevice, onViewLocation }: { paddies: any[]; deviceReadings?: any[]; fieldId: string; onAddDevice: () => void; onViewLocation: (paddy: any, e: React.MouseEvent) => void }) {
-  const router = useRouter();
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">Connected Paddies</h2>
-      </div>
-      {paddies.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-md p-12 text-center">
-          <p className="text-gray-500">No paddies connected yet</p>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {paddies.map((paddy) => {
-            const deviceStatus = getDeviceStatus(paddy, deviceReadings || []);
-            const deviceReading = deviceReadings?.find(r => r.deviceId === paddy.deviceId);
-            const npk = deviceReading?.npk;
-            // Extract temperature and humidity from device reading
-            const temperature = deviceReading?.sensors?.temperature ?? deviceReading?.temperature;
-            const humidity = deviceReading?.sensors?.humidity ?? deviceReading?.humidity;
-            const hasNPK = npk && (npk.n !== undefined || npk.p !== undefined || npk.k !== undefined);
-            const hasTempHumidity = temperature !== undefined || humidity !== undefined;
-            
-            return (
-              <div 
-                key={paddy.id} 
-                onClick={() => router.push(`/device/${paddy.deviceId}`)}
-                className="bg-white rounded-xl shadow-md border border-gray-200 p-6 hover:border-green-500 hover:shadow-lg transition-all cursor-pointer">
-                {/* Header Section */}
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900">{paddy.paddyName}</h3>
-                    <p className="text-sm text-gray-600">Device: {paddy.deviceId}</p>
-                    {paddy.description && (
-                      <p className="text-sm text-gray-500 mt-2">{paddy.description}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 ml-4">
-                    <button
-                      onClick={(e) => onViewLocation(paddy, e)}
-                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                      title="View location on map"
-                    >
-                      <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                    </button>
-                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                      deviceStatus.color === 'green' ? 'bg-green-100 text-green-800' :
-                      deviceStatus.color === 'yellow' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-red-100 text-red-800'
-                    }`}>
-                      {deviceStatus.badge}
-                    </span>
-                  </div>
+            {/* Bottom Sheet */}
+            <div className="fixed inset-x-0 bottom-0 z-50 animate-slide-up">
+              <div className="bg-white rounded-t-3xl shadow-2xl max-h-[70vh] flex flex-col border-t-4 border-green-500">
+                {/* Handle Bar */}
+                <div className="flex justify-center pt-3 pb-4">
+                  <div className="w-12 h-1.5 bg-green-300 rounded-full" />
                 </div>
                 
-                {/* NPK Values and Temperature/Humidity - Full Width */}
-                {(hasNPK || hasTempHumidity) && (
-                  <div className={`grid gap-3 ${
-                    hasTempHumidity 
-                      ? 'grid-cols-3 sm:grid-cols-5' 
-                      : 'grid-cols-3'
-                  }`}>
-                    {npk?.n !== undefined && (
-                      <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
-                        <p className="text-xs text-blue-600 font-semibold mb-1">Nitrogen</p>
-                        <p className="text-lg font-bold text-blue-900">{Math.round(npk.n)}</p>
-                        <p className="text-xs text-blue-500 mt-0.5">mg/kg</p>
-                      </div>
-                    )}
-                    {npk?.p !== undefined && (
-                      <div className="bg-purple-50 rounded-lg p-3 border border-purple-100">
-                        <p className="text-xs text-purple-600 font-semibold mb-1">Phosphorus</p>
-                        <p className="text-lg font-bold text-purple-900">{Math.round(npk.p)}</p>
-                        <p className="text-xs text-purple-500 mt-0.5">mg/kg</p>
-                      </div>
-                    )}
-                    {npk?.k !== undefined && (
-                      <div className="bg-orange-50 rounded-lg p-3 border border-orange-100">
-                        <p className="text-xs text-orange-600 font-semibold mb-1">Potassium</p>
-                        <p className="text-lg font-bold text-orange-900">{Math.round(npk.k)}</p>
-                        <p className="text-xs text-orange-500 mt-0.5">mg/kg</p>
-                      </div>
-                    )}
-                    {temperature !== undefined && (
-                      <div className="bg-red-50 rounded-lg p-3 border border-red-100">
-                        <p className="text-xs text-red-600 font-semibold mb-1 flex items-center gap-1">
-                          <span>🌡️</span> Temperature
-                        </p>
-                        <p className="text-lg font-bold text-red-900">{Math.round(temperature)}</p>
-                        <p className="text-xs text-red-500 mt-0.5">°C</p>
-                      </div>
-                    )}
-                    {humidity !== undefined && (
-                      <div className="bg-cyan-50 rounded-lg p-3 border border-cyan-100">
-                        <p className="text-xs text-cyan-600 font-semibold mb-1 flex items-center gap-1">
-                          <span>💧</span> Humidity
-                        </p>
-                        <p className="text-lg font-bold text-cyan-900">{Math.round(humidity)}</p>
-                        <p className="text-xs text-cyan-500 mt-0.5">%</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className={`mt-3 p-3 rounded-lg text-sm ${
-                  deviceStatus.color === 'green' ? 'bg-green-50 text-green-800' :
-                  deviceStatus.color === 'yellow' ? 'bg-yellow-50 text-yellow-800' :
-                  'bg-red-50 text-red-800'
-                }`}>
-                  {deviceStatus.message}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Statistics Tab Component
-function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadings }: { paddies: any[]; deviceReadings: any[]; fieldId: string; setDeviceReadings: React.Dispatch<React.SetStateAction<any[]>> }) {
-  const { user } = useAuth();
-  const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d' | 'all'>('7d');
-  const [historicalLogs, setHistoricalLogs] = useState<any[]>([]);
-  const [realtimeLogs, setRealtimeLogs] = useState<any[]>([]);
-  const [isLoadingLogs, setIsLoadingLogs] = useState(true); // Start with true to show loading
-  const [isLogging, setIsLogging] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
-  const [fieldStats, setFieldStats] = useState<{
-    nitrogen: { current: number | null; average: number | null; min: number | null; max: number | null };
-    phosphorus: { current: number | null; average: number | null; min: number | null; max: number | null };
-    potassium: { current: number | null; average: number | null; min: number | null; max: number | null };
-    temperature: { current: number | null; average: number | null; min: number | null; max: number | null };
-    humidity: { current: number | null; average: number | null; min: number | null; max: number | null };
-  } | null>(null);
-  const [hasInitialized, setHasInitialized] = useState(false);
-  
-  // Calculate field-level statistics from current device readings AND historical logs
-  useEffect(() => {
-    console.log('[Statistics] Device readings:', deviceReadings);
-    console.log('[Statistics] Historical logs:', historicalLogs.length);
-    
-    // Get current NPK values from RTDB
-    const npkValues = deviceReadings
-      .filter(r => r && r.npk)
-      .map(r => r.npk);
-
-    console.log('[Statistics] NPK values from devices:', npkValues);
-
-    // Extract temperature and humidity from device readings
-    // Check both sensors.temperature/humidity and direct properties
-    const allTemperatureFromDevices = deviceReadings
-      .map(r => {
-        if (!r) return null;
-        // Check sensors object first, then direct properties
-        return r.sensors?.temperature ?? r.temperature ?? null;
-      })
-      .filter(t => t !== null && t !== undefined) as number[];
-    
-    const allHumidityFromDevices = deviceReadings
-      .map(r => {
-        if (!r) return null;
-        // Check sensors object first, then direct properties
-        return r.sensors?.humidity ?? r.humidity ?? null;
-      })
-      .filter(h => h !== null && h !== undefined) as number[];
-
-    // Get historical values from logs
-    const historicalNitrogen = historicalLogs
-      .filter(log => log && log.nitrogen !== undefined && log.nitrogen !== null)
-      .map(log => log.nitrogen as number);
-    
-    const historicalPhosphorus = historicalLogs
-      .filter(log => log && log.phosphorus !== undefined && log.phosphorus !== null)
-      .map(log => log.phosphorus as number);
-    
-    const historicalPotassium = historicalLogs
-      .filter(log => log && log.potassium !== undefined && log.potassium !== null)
-      .map(log => log.potassium as number);
-
-    // Current values from RTDB - get all values and use the first one as "current"
-    const allNitrogenFromDevices = npkValues.map(n => n?.n).filter(n => n !== undefined && n !== null) as number[];
-    const allPhosphorusFromDevices = npkValues.map(n => n?.p).filter(n => n !== undefined && n !== null) as number[];
-    const allPotassiumFromDevices = npkValues.map(n => n?.k).filter(n => n !== undefined && n !== null) as number[];
-    
-    const currentNitrogen = allNitrogenFromDevices.length > 0 ? allNitrogenFromDevices[0] : undefined;
-    const currentPhosphorus = allPhosphorusFromDevices.length > 0 ? allPhosphorusFromDevices[0] : undefined;
-    const currentPotassium = allPotassiumFromDevices.length > 0 ? allPotassiumFromDevices[0] : undefined;
-    const currentTemperature = allTemperatureFromDevices.length > 0 ? allTemperatureFromDevices[0] : undefined;
-    const currentHumidity = allHumidityFromDevices.length > 0 ? allHumidityFromDevices[0] : undefined;
-
-    // Combine current and historical for comprehensive stats
-    // Include all device values, not just the first one
-    const allNitrogen = [...allNitrogenFromDevices, ...historicalNitrogen];
-    const allPhosphorus = [...allPhosphorusFromDevices, ...historicalPhosphorus];
-    const allPotassium = [...allPotassiumFromDevices, ...historicalPotassium];
-    // Temperature and humidity only from current devices (no historical logs yet)
-    const allTemperature = [...allTemperatureFromDevices];
-    const allHumidity = [...allHumidityFromDevices];
-
-    console.log('[Statistics] Combined data - N:', allNitrogen, 'P:', allPhosphorus, 'K:', allPotassium);
-    console.log('[Statistics] Temperature:', allTemperature, 'Humidity:', allHumidity);
-
-    const calculateStats = (current: number | undefined, allValues: number[]) => {
-      if (allValues.length === 0 && current === undefined) {
-        return { current: null, average: null, min: null, max: null };
-      }
-      
-      if (allValues.length === 0) {
-        return {
-          current: current || null,
-          average: current || null,
-          min: current || null,
-          max: current || null,
-        };
-      }
-
-      return {
-        current: current !== undefined ? current : (allValues.length > 0 ? allValues[allValues.length - 1] : null),
-        average: allValues.reduce((a, b) => a + b, 0) / allValues.length,
-        min: Math.min(...allValues),
-        max: Math.max(...allValues),
-      };
-    };
-
-    const stats = {
-      nitrogen: calculateStats(currentNitrogen, allNitrogen),
-      phosphorus: calculateStats(currentPhosphorus, allPhosphorus),
-      potassium: calculateStats(currentPotassium, allPotassium),
-      temperature: calculateStats(currentTemperature, allTemperature),
-      humidity: calculateStats(currentHumidity, allHumidity),
-    };
-
-    console.log('[Statistics] Calculated stats:', stats);
-    setFieldStats(stats);
-  }, [deviceReadings, historicalLogs]);
-
-  // Manual log function - logs current readings immediately
-  const handleManualLog = async () => {
-    if (!user) return;
-    
-    setIsLogging(true);
-    try {
-      const { logSensorReadings } = await import('@/lib/utils/sensorLogging');
-      let loggedCount = 0;
-      
-      for (const reading of deviceReadings) {
-        if (reading.npk && (reading.npk.n !== undefined || reading.npk.p !== undefined || reading.npk.k !== undefined)) {
-          const paddy = paddies.find(p => p.deviceId === reading.deviceId);
-          if (paddy) {
-            console.log(`[Manual Log] Logging ${reading.deviceId}:`, reading.npk);
-            await logSensorReadings(user.uid, fieldId, paddy.id, reading.npk);
-            loggedCount++;
-          }
-        }
-      }
-      
-      if (loggedCount > 0) {
-        alert(`Successfully logged ${loggedCount} reading(s) to history!`);
-        // Refresh historical logs by re-triggering the fetch
-        const currentRange = timeRange;
-        setTimeRange('7d');
-        setTimeout(() => setTimeRange(currentRange), 100);
-      } else {
-        alert('No NPK data available to log. Make sure devices are connected and sending data.');
-      }
-    } catch (error) {
-      console.error('Error manually logging:', error);
-      alert('Failed to log readings. Please try again.');
-    } finally {
-      setIsLogging(false);
-    }
-  };
-  
-  // Reset to page 1 when time range changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [timeRange]);
-
-  // Real-time RTDB listeners for all devices
-  useEffect(() => {
-    if (!paddies.length) return;
-
-    const unsubscribers: (() => void)[] = [];
-
-    paddies.forEach((paddy) => {
-      if (!paddy.deviceId) return;
-
-      const npkRef = ref(database, `devices/${paddy.deviceId}/npk`);
-      const unsubscribe = onValue(npkRef, (snapshot) => {
-        if (!snapshot.exists()) return;
-        
-        const data = snapshot.val();
-        const timestamp = data.timestamp && data.timestamp > 1700000000000 
-          ? new Date(data.timestamp) 
-          : new Date();
-        
-        if (data.n !== undefined || data.p !== undefined || data.k !== undefined) {
-          const newLog = {
-            id: `rtdb-${paddy.deviceId}-${Date.now()}`,
-            timestamp,
-            nitrogen: data.n,
-            phosphorus: data.p,
-            potassium: data.k,
-            paddyId: paddy.id,
-            paddyName: paddy.paddyName,
-            deviceId: paddy.deviceId,
-            _src: 'rtdb'
-          };
-          
-          setRealtimeLogs(prev => {
-            // Remove old logs from same device and add new one
-            const filtered = prev.filter(log => log.deviceId !== paddy.deviceId || log._src !== 'rtdb');
-            return [...filtered, newLog].slice(-20); // Keep last 20 real-time entries
-          });
-        }
-      });
-
-      unsubscribers.push(unsubscribe);
-
-      // Real-time listener for temperature and humidity sensors
-      const sensorsRef = ref(database, `devices/${paddy.deviceId}/sensors`);
-      const unsubscribeSensors = onValue(sensorsRef, (snapshot) => {
-        if (snapshot.exists()) {
-          const sensors = snapshot.val();
-          // If temperature or humidity is updated, update deviceReadings directly
-          if (sensors.temperature !== undefined || sensors.humidity !== undefined) {
-            console.log(`[Sensors] Temperature/Humidity updated for ${paddy.deviceId}:`, sensors);
-            // Update deviceReadings state directly to reflect sensor changes
-            setDeviceReadings((prev: any[]) => {
-              const updated = prev.map((reading: any) => {
-                if (reading.deviceId === paddy.deviceId) {
-                  return {
-                    ...reading,
-                    sensors: {
-                      ...reading.sensors,
-                      temperature: sensors.temperature ?? reading.sensors?.temperature,
-                      humidity: sensors.humidity ?? reading.sensors?.humidity,
-                    },
-                    temperature: sensors.temperature ?? reading.temperature,
-                    humidity: sensors.humidity ?? reading.humidity,
-                  };
-                }
-                return reading;
-              });
-              // If device not in readings yet, add it
-              if (!updated.find((r: any) => r.deviceId === paddy.deviceId)) {
-                updated.push({
-                  deviceId: paddy.deviceId,
-                  paddyId: paddy.id,
-                  sensors: {
-                    temperature: sensors.temperature,
-                    humidity: sensors.humidity,
-                  },
-                  temperature: sensors.temperature,
-                  humidity: sensors.humidity,
-                });
-              }
-              return updated;
-            });
-          }
-        }
-      });
-      unsubscribers.push(unsubscribeSensors);
-    });
-
-    return () => {
-      unsubscribers.forEach(unsub => unsub());
-    };
-  }, [paddies]);
-
-  // Initial data fetch when component mounts or paddies become available
-  useEffect(() => {
-    if (!user || paddies.length === 0) {
-      setIsLoadingLogs(false);
-      return;
-    }
-    
-    // Mark as initialized once we have the required data
-    if (!hasInitialized && paddies.length > 0) {
-      setHasInitialized(true);
-    }
-  }, [user, paddies, hasInitialized]);
-
-  // Real-time Firestore listeners for historical logs
-  useEffect(() => {
-    if (!user || paddies.length === 0) {
-      setIsLoadingLogs(false);
-      return;
-    }
-    
-    setIsLoadingLogs(true);
-
-    const now = new Date();
-    let startDate = new Date();
-    switch (timeRange) {
-      case '7d': startDate.setDate(now.getDate() - 7); break;
-      case '30d': startDate.setDate(now.getDate() - 30); break;
-      case '90d': startDate.setDate(now.getDate() - 90); break;
-      case 'all': startDate = new Date(0); break;
-    }
-
-    const unsubscribers: (() => void)[] = [];
-    let latestLogs: any[] = [];
-    let initializedCount = 0;
-    const totalPaddies = paddies.length;
-
-    const mergeAndSet = (isInitial = false) => {
-      if (isInitial) {
-        initializedCount++;
-      }
-      const sorted = latestLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-      setHistoricalLogs(sorted);
-      // Only set loading to false after all paddies have initialized
-      if (initializedCount >= totalPaddies || !isInitial) {
-        setIsLoadingLogs(false);
-      }
-    };
-
-    paddies.forEach((paddy) => {
-      const logsRef = collection(db, `users/${user.uid}/fields/${fieldId}/paddies/${paddy.id}/logs`);
-      const q = timeRange === 'all' ? logsRef : query(logsRef, where('timestamp', '>=', startDate));
-      
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const arr: any[] = [];
-        snapshot.forEach((doc) => {
-          const data: any = doc.data();
-          const logDate = data.timestamp?.toDate?.() || new Date(data.timestamp);
-          if (logDate >= startDate) {
-            arr.push({ 
-              ...data, 
-              id: doc.id, 
-              paddyId: paddy.id, 
-              paddyName: paddy.paddyName,
-              timestamp: logDate,
-              _src: 'paddy'
-            });
-          }
-        });
-        
-        // Update logs for this paddy
-        latestLogs = latestLogs.filter(log => log.paddyId !== paddy.id || log._src !== 'paddy');
-        latestLogs = [...latestLogs, ...arr];
-        
-        // Check if this is the first snapshot (initial load)
-        const isInitial = initializedCount < totalPaddies;
-        mergeAndSet(isInitial);
-      }, (err) => {
-        console.error(`Paddy logs listener error for ${paddy.id}:`, err);
-        initializedCount++;
-        if (initializedCount >= totalPaddies) {
-          setIsLoadingLogs(false);
-        }
-      });
-
-      unsubscribers.push(unsubscribe);
-    });
-
-    return () => {
-      unsubscribers.forEach(unsub => {
-        try { unsub(); } catch {}
-      });
-    };
-  }, [user, fieldId, paddies, timeRange]);
-  
-  return (
-    <div className="space-y-4">
-      {/* Debug Info - Show current device readings */}
-      {deviceReadings.length > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <div className="flex-1">
-              <h3 className="text-sm font-semibold text-blue-900 mb-1">Current Device Status</h3>
-              <p className="text-xs text-blue-700 mb-2">
-                Found {deviceReadings.length} device(s) connected. 
-                {deviceReadings.filter(r => r.npk && (r.npk.n !== undefined || r.npk.p !== undefined || r.npk.k !== undefined)).length > 0
-                  ? ` ${deviceReadings.filter(r => r.npk && (r.npk.n !== undefined || r.npk.p !== undefined || r.npk.k !== undefined)).length} device(s) have NPK data.`
-                  : ' No devices have NPK data yet.'}
-              </p>
-              <details className="text-xs">
-                <summary className="cursor-pointer text-blue-600 hover:text-blue-800">View device data (debug)</summary>
-                <pre className="mt-2 p-2 bg-white rounded text-xs overflow-auto max-h-40">
-                  {JSON.stringify(deviceReadings.map(r => ({
-                    deviceId: r.deviceId,
-                    status: r.status,
-                    npk: r.npk,
-                    connectedAt: r.connectedAt
-                  })), null, 2)}
-                </pre>
-              </details>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Average Statistics Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        {/* Nitrogen Card */}
-        <div className="bg-white rounded-lg shadow-md p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-700">Nitrogen (N)</h3>
-            <span className="text-xl">🧪</span>
-          </div>
-          <p className="text-xl font-bold text-gray-900">
-            {fieldStats && fieldStats.nitrogen.current !== null && fieldStats.nitrogen.current !== undefined
-              ? Math.round(fieldStats.nitrogen.current)
-              : '--'}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">mg/kg</p>
-          {fieldStats && fieldStats.nitrogen.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.nitrogen.average)}</p>
-          )}
-        </div>
-
-        {/* Phosphorus Card */}
-        <div className="bg-white rounded-lg shadow-md p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-700">Phosphorus (P)</h3>
-            <span className="text-xl">⚗️</span>
-          </div>
-          <p className="text-xl font-bold text-gray-900">
-            {fieldStats && fieldStats.phosphorus.current !== null && fieldStats.phosphorus.current !== undefined
-              ? Math.round(fieldStats.phosphorus.current)
-              : '--'}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">mg/kg</p>
-          {fieldStats && fieldStats.phosphorus.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.phosphorus.average)}</p>
-          )}
-        </div>
-
-        {/* Potassium Card */}
-        <div className="bg-white rounded-lg shadow-md p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-700">Potassium (K)</h3>
-            <span className="text-xl">🔬</span>
-          </div>
-          <p className="text-xl font-bold text-gray-900">
-            {fieldStats && fieldStats.potassium.current !== null && fieldStats.potassium.current !== undefined
-              ? Math.round(fieldStats.potassium.current)
-              : '--'}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">mg/kg</p>
-          {fieldStats && fieldStats.potassium.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.potassium.average)}</p>
-          )}
-        </div>
-
-        {/* Temperature Card */}
-        <div className={`rounded-lg shadow-md p-4 ${fieldStats && fieldStats.temperature.current !== null ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-600">Temperature</h3>
-            <span className="text-xl">🌡️</span>
-          </div>
-          <p className={`text-xl font-bold ${fieldStats && fieldStats.temperature.current !== null ? 'text-orange-600' : 'text-gray-600'}`}>
-            {fieldStats && fieldStats.temperature.current !== null && fieldStats.temperature.current !== undefined
-              ? `${Math.round(fieldStats.temperature.current)}°C`
-              : '--'}
-          </p>
-          {fieldStats && fieldStats.temperature.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.temperature.average)}°C</p>
-          )}
-        </div>
-
-        {/* Humidity Card */}
-        <div className={`rounded-lg shadow-md p-4 ${fieldStats && fieldStats.humidity.current !== null ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-600">Humidity</h3>
-            <span className="text-xl">💧</span>
-          </div>
-          <p className={`text-xl font-bold ${fieldStats && fieldStats.humidity.current !== null ? 'text-blue-600' : 'text-gray-600'}`}>
-            {fieldStats && fieldStats.humidity.current !== null && fieldStats.humidity.current !== undefined
-              ? `${Math.round(fieldStats.humidity.current)}%`
-              : '--'}
-          </p>
-          {fieldStats && fieldStats.humidity.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.humidity.average)}%</p>
-          )}
-        </div>
-
-        {/* Water Level Card - Coming Soon */}
-        <div className="bg-gray-50 rounded-lg shadow-md p-4 opacity-60">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-semibold text-gray-600">Water Level</h3>
-            <span className="text-xl">🌊</span>
-          </div>
-          <p className="text-xl font-bold text-gray-600">--</p>
-          <p className="text-xs text-gray-400 mt-1">Coming soon</p>
-        </div>
-      </div>
-
-      {/* Data Trends */}
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-gray-900">Data Trends</h2>
-            <p className="text-xs text-gray-500 mt-1">Historical NPK readings stored in Firestore</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={handleManualLog}
-              disabled={isLogging || deviceReadings.length === 0}
-              className="px-3 py-1.5 text-xs sm:text-sm rounded-lg transition-colors bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-              title="Manually log current NPK readings to history"
-            >
-              {isLogging ? (
-                <>
-                  <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  <span className="hidden sm:inline">Logging...</span>
-                </>
-              ) : (
-                <>
-                  <span>📝</span>
-                  <span className="hidden sm:inline">Log Now</span>
-                  <span className="sm:hidden">Log</span>
-                </>
-              )}
-            </button>
-            <button
-              onClick={() => setTimeRange('7d')}
-              className={`px-3 py-1.5 text-xs sm:text-sm rounded-lg transition-colors ${
-                timeRange === '7d' 
-                  ? 'bg-green-600 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              7 Days
-            </button>
-            <button
-              onClick={() => setTimeRange('30d')}
-              className={`px-3 py-1.5 text-xs sm:text-sm rounded-lg transition-colors ${
-                timeRange === '30d' 
-                  ? 'bg-green-600 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              30 Days
-            </button>
-            <button
-              onClick={() => setTimeRange('90d')}
-              className={`px-3 py-1.5 text-xs sm:text-sm rounded-lg transition-colors ${
-                timeRange === '90d' 
-                  ? 'bg-green-600 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              90 Days
-            </button>
-            <button
-              onClick={() => setTimeRange('all')}
-              className={`px-3 py-1.5 text-xs sm:text-sm rounded-lg transition-colors ${
-                timeRange === 'all' 
-                  ? 'bg-green-600 text-white' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              All Time
-            </button>
-          </div>
-        </div>
-        <div>
-          {isLoadingLogs ? (
-            <div className="flex flex-col items-center py-8">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mb-3"></div>
-              <p className="text-gray-500">Loading historical data...</p>
-            </div>
-          ) : (() => {
-            // Merge historical and real-time logs, dedupe, sort
-            const allLogs = [...historicalLogs, ...realtimeLogs];
-            const seen = new Set<string>();
-            const deduped = allLogs.filter(log => {
-              const key = `${Math.floor(log.timestamp.getTime() / 1000)}-${log.paddyId || log.deviceId}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-            const sortedLogs = deduped
-              .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()); // Newest first
-            const chartLogs = sortedLogs
-              .slice()
-              .reverse()
-              .slice(-10); // Last 10 for chart (oldest to newest)
-
-            // Pagination logic
-            const totalPages = Math.ceil(sortedLogs.length / itemsPerPage);
-            const startIndex = (currentPage - 1) * itemsPerPage;
-            const endIndex = startIndex + itemsPerPage;
-            const paginatedLogs = sortedLogs.slice(startIndex, endIndex);
-
-            return sortedLogs.length > 0 ? (
-              <div className="space-y-6">
-                {/* Info Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                  <div>
-                    <p className="text-sm text-gray-600">
-                      Showing <span className="font-semibold text-gray-900">{sortedLogs.length}</span> reading{sortedLogs.length !== 1 ? 's' : ''} 
-                      {timeRange !== 'all' && (
-                        <span> over the last {
-                          timeRange === '7d' ? '7 days' :
-                          timeRange === '30d' ? '30 days' :
-                          timeRange === '90d' ? '90 days' :
-                          'recording period'
-                        }</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                      Live updates enabled
-                    </p>
-                  </div>
-                </div>
-
-                {/* Chart */}
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <TrendsChart 
-                    logs={chartLogs} 
-                    key={`${historicalLogs.length}-${realtimeLogs.length}-${realtimeLogs[realtimeLogs.length - 1]?.timestamp?.getTime() || 0}`} 
-                  />
-                </div>
-
-                {/* Data Table */}
-                <div className="overflow-hidden">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-                    <h4 className="text-md font-semibold text-gray-900">Reading History</h4>
-                    {totalPages > 1 && (
-                      <p className="text-xs sm:text-sm text-gray-600">
-                        Page <span className="font-semibold">{currentPage}</span> of <span className="font-semibold">{totalPages}</span>
-                        {' '}({startIndex + 1}-{Math.min(endIndex, sortedLogs.length)} of {sortedLogs.length})
-                      </p>
-                    )}
-                  </div>
-                  
-                  {/* Desktop Table */}
-                  <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full border-collapse">
-                      <thead>
-                        <tr className="bg-gray-50 border-b-2 border-gray-200">
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Timestamp</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Paddy</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Nitrogen (N)</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Phosphorus (P)</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Potassium (K)</th>
-                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Source</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {paginatedLogs.map((log, index) => {
-                          const globalIndex = startIndex + index;
-                          return (
-                            <tr 
-                              key={log.id || `log-${globalIndex}`} 
-                              className={`hover:bg-gray-50 transition-colors ${
-                                globalIndex === 0 && realtimeLogs.some(rt => rt.id === log.id) ? 'bg-green-50' : ''
-                              }`}
-                            >
-                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
-                                {log.timestamp.toLocaleString('en-US', {
-                                  year: 'numeric',
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                  second: '2-digit'
-                                })}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700">
-                                {log.paddyName || 'Unknown'}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-blue-700">
-                                {log.nitrogen !== undefined && log.nitrogen !== null ? `${Math.round(log.nitrogen)} mg/kg` : '--'}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-purple-700">
-                                {log.phosphorus !== undefined && log.phosphorus !== null ? `${Math.round(log.phosphorus)} mg/kg` : '--'}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-orange-700">
-                                {log.potassium !== undefined && log.potassium !== null ? `${Math.round(log.potassium)} mg/kg` : '--'}
-                              </td>
-                              <td className="px-4 py-3 whitespace-nowrap text-xs">
-                                <span className={`px-2 py-1 rounded-full ${
-                                  log._src === 'rtdb' ? 'bg-green-100 text-green-800' :
-                                  log._src === 'paddy' ? 'bg-blue-100 text-blue-800' :
-                                  'bg-gray-100 text-gray-800'
-                                }`}>
-                                  {log._src === 'rtdb' ? 'Live' : log._src === 'paddy' ? 'Paddy Log' : 'Device Log'}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                {/* Modal Content */}
+                <div className="flex-1 overflow-hidden px-6 pb-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-2xl font-bold text-gray-900">Scan Devices</h2>
+                    <button
+                      onClick={closeScanModal}
+                      className="text-gray-400 hover:text-gray-600 transition-colors"
+                    >
+                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </div>
 
-                  {/* Mobile Cards */}
-                  <div className="md:hidden space-y-3">
-                    {paginatedLogs.map((log, index) => {
-                      const globalIndex = startIndex + index;
-                      return (
-                        <div 
-                          key={log.id || `log-${globalIndex}`}
-                          className={`bg-white border rounded-lg p-4 shadow-sm ${
-                            globalIndex === 0 && realtimeLogs.some(rt => rt.id === log.id) ? 'border-green-300 bg-green-50' : 'border-gray-200'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between mb-3">
-                            <div className="flex-1">
-                              <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Paddy</p>
-                              <p className="text-sm font-medium text-gray-900">{log.paddyName || 'Unknown'}</p>
-                              <p className="text-xs font-semibold text-gray-500 uppercase mb-1 mt-2">Timestamp</p>
-                              <p className="text-sm text-gray-900">
-                                {log.timestamp.toLocaleString('en-US', {
-                                  month: 'short',
-                                  day: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                  second: '2-digit'
-                                })}
-                              </p>
-                              <p className="text-xs text-gray-500 mt-1">
-                                {log.timestamp.toLocaleDateString('en-US', { year: 'numeric' })}
-                              </p>
-                            </div>
-                            <span className={`px-2 py-1 rounded-full text-xs ${
-                              log._src === 'rtdb' ? 'bg-green-100 text-green-800' :
-                              log._src === 'paddy' ? 'bg-blue-100 text-blue-800' :
-                              'bg-gray-100 text-gray-800'
+                  {/* Scan Results */}
+                  {Object.keys(scanResults).length > 0 && (
+                    <div className="mb-6 space-y-2 overflow-y-auto max-h-[200px]">
+                      {Object.entries(scanResults).map(([paddyId, result]) => {
+                        const paddy = paddies.find(p => p.id === paddyId);
+                        return (
+                          <div
+                            key={paddyId}
+                            className={`p-3 rounded-lg border ${
+                              result.status === 'success'
+                                ? 'bg-green-50 border-green-200'
+                                : 'bg-red-50 border-red-200'
+                            }`}
+                          >
+                            <p className="text-sm font-medium text-gray-900">
+                              {paddy?.paddyName}
+                            </p>
+                            <p className={`text-sm ${
+                              result.status === 'success' ? 'text-green-700' : 'text-red-700'
                             }`}>
-                              {log._src === 'rtdb' ? 'Live' : log._src === 'paddy' ? 'Paddy' : 'Device'}
-                            </span>
+                              {result.message}
+                            </p>
                           </div>
-                          <div className="grid grid-cols-3 gap-3">
-                            <div>
-                              <p className="text-xs font-semibold text-blue-600 mb-1">Nitrogen (N)</p>
-                              <p className="text-lg font-bold text-blue-700">
-                                {log.nitrogen !== undefined && log.nitrogen !== null ? Math.round(log.nitrogen) : '--'}
-                              </p>
-                              <p className="text-xs text-gray-500">mg/kg</p>
-                            </div>
-                            <div>
-                              <p className="text-xs font-semibold text-purple-600 mb-1">Phosphorus (P)</p>
-                              <p className="text-lg font-bold text-purple-700">
-                                {log.phosphorus !== undefined && log.phosphorus !== null ? Math.round(log.phosphorus) : '--'}
-                              </p>
-                              <p className="text-xs text-gray-500">mg/kg</p>
-                            </div>
-                            <div>
-                              <p className="text-xs font-semibold text-orange-600 mb-1">Potassium (K)</p>
-                              <p className="text-lg font-bold text-orange-700">
-                                {log.potassium !== undefined && log.potassium !== null ? Math.round(log.potassium) : '--'}
-                              </p>
-                              <p className="text-xs text-gray-500">mg/kg</p>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Pagination Controls */}
-                  {totalPages > 1 && (
-                    <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-                      <div className="text-xs sm:text-sm text-gray-600 text-center sm:text-left">
-                        Showing {startIndex + 1} to {Math.min(endIndex, sortedLogs.length)} of {sortedLogs.length} readings
-                      </div>
-                      <div className="flex items-center gap-1 sm:gap-2">
-                        <button
-                          onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                          disabled={currentPage === 1}
-                          className={`px-2 sm:px-3 py-2 text-xs sm:text-sm rounded-lg transition-colors ${
-                            currentPage === 1
-                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                          }`}
-                        >
-                          <span className="hidden sm:inline">Previous</span>
-                          <span className="sm:hidden">Prev</span>
-                        </button>
-                        
-                        {/* Page Numbers */}
-                        <div className="flex items-center gap-1">
-                          {(() => {
-                            const maxPages = 5;
-                            const pagesToShow = Math.min(maxPages, totalPages);
-                            
-                            let startPage = 1;
-                            if (totalPages > maxPages) {
-                              if (currentPage <= 3) {
-                                startPage = 1;
-                              } else if (currentPage >= totalPages - 2) {
-                                startPage = totalPages - maxPages + 1;
-                              } else {
-                                startPage = currentPage - 2;
-                              }
-                            }
-                            
-                            return Array.from({ length: pagesToShow }, (_, i) => {
-                              const pageNum = startPage + i;
-                              return (
-                                <button
-                                  key={pageNum}
-                                  onClick={() => setCurrentPage(pageNum)}
-                                  className={`px-2 sm:px-3 py-2 text-xs sm:text-sm rounded-lg transition-colors ${
-                                    currentPage === pageNum
-                                      ? 'bg-green-600 text-white'
-                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                                  }`}
-                                >
-                                  {pageNum}
-                                </button>
-                              );
-                            });
-                          })()}
-                        </div>
-                        
-                        <button
-                          onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                          disabled={currentPage === totalPages}
-                          className={`px-2 sm:px-3 py-2 text-xs sm:text-sm rounded-lg transition-colors ${
-                            currentPage === totalPages
-                              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                              : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                          }`}
-                        >
-                          Next
-                        </button>
-                      </div>
+                        );
+                      })}
                     </div>
+                  )}
+
+                  {/* Mode Selection */}
+                  {Object.keys(scanResults).length === 0 && (
+                    <>
+                      <div className="mb-6 flex gap-3">
+                        <button
+                          onClick={() => {
+                            setScanMode('all');
+                            setSelectedDevices(new Set());
+                          }}
+                          className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
+                            scanMode === 'all'
+                              ? 'bg-green-600 text-white shadow-lg'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Scan All
+                        </button>
+                        <button
+                          onClick={() => setScanMode('manual')}
+                          className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
+                            scanMode === 'manual'
+                              ? 'bg-green-600 text-white shadow-lg'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Select Manually
+                        </button>
+                      </div>
+
+                      {/* Device List (if manual mode) */}
+                      {scanMode === 'manual' && (
+                        <div className="mb-6 space-y-2 overflow-y-auto max-h-[250px]">
+                          {paddies.length === 0 ? (
+                            <p className="text-gray-500 text-center py-4">No devices available</p>
+                          ) : (
+                            paddies.map((paddy) => (
+                              <label
+                                key={paddy.id}
+                                className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedDevices.has(paddy.id)}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedDevices);
+                                    if (e.target.checked) {
+                                      newSelected.add(paddy.id);
+                                    } else {
+                                      newSelected.delete(paddy.id);
+                                    }
+                                    setSelectedDevices(newSelected);
+                                  }}
+                                  className="w-5 h-5 text-green-600 rounded cursor-pointer"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-gray-900">{paddy.paddyName}</p>
+                                  <p className="text-xs text-gray-600">{paddy.deviceId}</p>
+                                </div>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      )}
+
+                      {/* Scan Summary */}
+                      {scanMode === 'all' && (
+                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                          <p className="text-sm text-blue-700">
+                            Ready to scan <span className="font-bold">{paddies.length}</span> device{paddies.length > 1 ? 's' : ''}
+                          </p>
+                        </div>
+                      )}
+
+                      {scanMode === 'manual' && (
+                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                          <p className="text-sm text-blue-700">
+                            Selected <span className="font-bold">{selectedDevices.size}</span> device{selectedDevices.size !== 1 ? 's' : ''}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Scan Button */}
+                      <button
+                        onClick={handleScanDevices}
+                        disabled={isScanning || (scanMode === 'manual' && selectedDevices.size === 0)}
+                        className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
+                      >
+                        {isScanning ? (
+                          <>
+                            <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Scanning...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                            Scan Now
+                          </>
+                        )}
+                      </button>
+                    </>
+                  )}
+
+                  {/* Results Footer */}
+                  {Object.keys(scanResults).length > 0 && (
+                    <button
+                      onClick={closeScanModal}
+                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 mt-4"
+                    >
+                      Done
+                    </button>
                   )}
                 </div>
               </div>
-            ) : (
-              <div className="text-center py-8">
-                <div className="text-5xl mb-3">📊</div>
-                <p className="text-gray-500 font-medium">No historical data found</p>
-                <p className="text-sm text-gray-400 mt-2">
-                  {deviceReadings.length > 0 
-                    ? 'NPK readings will be automatically logged to Firestore. Check back later!'
-                    : 'Connect devices to start logging NPK readings.'}
-                </p>
-                {deviceReadings.length > 0 && (
-                  <p className="text-xs text-gray-400 mt-1">
-                    Current devices: {deviceReadings.filter(r => r.npk).length} with NPK data
-                  </p>
-                )}
-              </div>
-            );
-          })()}
-        </div>
-      </div>
-
-      {/* Current Device Readings */}
-      {deviceReadings.length > 0 && (
-        <div className="bg-white rounded-xl shadow-md p-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">Current Device Readings</h2>
-          <div className="space-y-3">
-            {deviceReadings.map((reading) => {
-              const paddy = paddies.find(p => p.deviceId === reading.deviceId);
-              const npk = reading.npk;
-              
-              if (!npk || (npk.n === undefined && npk.p === undefined && npk.k === undefined)) {
-                return (
-                  <div key={reading.deviceId} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold text-gray-900">{paddy?.paddyName || reading.deviceId}</p>
-                        <p className="text-xs text-gray-500">Device: {reading.deviceId}</p>
-                      </div>
-                      <span className="text-xs text-gray-400">No NPK data</span>
-                    </div>
-                  </div>
-                );
-              }
-              
-              return (
-                <div key={reading.deviceId} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <p className="font-semibold text-gray-900">{paddy?.paddyName || reading.deviceId}</p>
-                      <p className="text-xs text-gray-500">Device: {reading.deviceId}</p>
-                    </div>
-                    <span className={`text-xs px-2 py-1 rounded ${
-                      reading.status === 'connected' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                    }`}>
-                      {reading.status || 'unknown'}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3">
-                    {npk.n !== undefined && (
-                      <div className="bg-blue-50 rounded-lg p-3">
-                        <p className="text-xs text-blue-600 font-medium mb-1">Nitrogen (N)</p>
-                        <p className="text-lg font-bold text-blue-900">{Math.round(npk.n)}</p>
-                        <p className="text-xs text-blue-500">mg/kg</p>
-                      </div>
-                    )}
-                    {npk.p !== undefined && (
-                      <div className="bg-purple-50 rounded-lg p-3">
-                        <p className="text-xs text-purple-600 font-medium mb-1">Phosphorus (P)</p>
-                        <p className="text-lg font-bold text-purple-900">{Math.round(npk.p)}</p>
-                        <p className="text-xs text-purple-500">mg/kg</p>
-                      </div>
-                    )}
-                    {npk.k !== undefined && (
-                      <div className="bg-orange-50 rounded-lg p-3">
-                        <p className="text-xs text-orange-600 font-medium mb-1">Potassium (K)</p>
-                        <p className="text-lg font-bold text-orange-900">{Math.round(npk.k)}</p>
-                        <p className="text-xs text-orange-500">mg/kg</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Field Summary */}
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <h2 className="text-lg font-bold text-gray-900 mb-3">Field Summary</h2>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="p-3 bg-gray-50 rounded-lg">
-            <p className="text-xs text-gray-600">Total Paddies</p>
-            <p className="text-xl font-bold text-gray-900">{paddies.length}</p>
-          </div>
-          <div className="p-3 bg-gray-50 rounded-lg">
-            <p className="text-xs text-gray-600">Active Devices</p>
-            <p className="text-xl font-bold text-gray-900">{paddies.filter(p => getDeviceStatus(p, deviceReadings).status !== 'offline').length}</p>
-          </div>
-          <div className="p-3 bg-gray-50 rounded-lg">
-            <p className="text-xs text-gray-600">Devices with NPK</p>
-            <p className="text-xl font-bold text-gray-900">
-              {deviceReadings.filter(r => r.npk && (r.npk.n !== undefined || r.npk.p !== undefined || r.npk.k !== undefined)).length}
-            </p>
-          </div>
-          <div className="p-3 bg-gray-50 rounded-lg">
-            <p className="text-xs text-gray-600">Historical Logs</p>
-            <p className="text-xl font-bold text-gray-900">{historicalLogs.length}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Information Tab Component
-function InformationTab({ field, onFieldUpdate }: { field: any; onFieldUpdate: () => void }) {
-  const { user } = useAuth();
-  const router = useRouter();
-  const [isConcluding, setIsConcluding] = useState(false);
-  const [isEditingFieldName, setIsEditingFieldName] = useState(false);
-  const [fieldNameValue, setFieldNameValue] = useState('');
-  const [isSavingFieldName, setIsSavingFieldName] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  
-  if (!field) return null;
-
-  const variety = getVarietyByName(field.riceVariety);
-  const daysSincePlanting = getDaysSincePlanting(field.startDay);
-  const expectedHarvest = variety ? getExpectedHarvestDate(field.startDay, variety) : null;
-  const isCompleted = daysSincePlanting >= (variety?.maturityDays?.max || 130);
-  const fieldStatus = field.status || 'active'; // 'active', 'concluded', 'harvested'
-
-  const handleConcludeField = async () => {
-    if (!user || !field.id) return;
-
-    const action = isCompleted ? 'harvest' : 'conclude';
-    const confirmMessage = isCompleted
-      ? 'Mark this field as harvested? This indicates the season has been completed successfully.'
-      : 'End this field season early? You can mark it as concluded if you need to stop tracking before maturity.';
-
-    if (!confirm(confirmMessage)) return;
-
-    setIsConcluding(true);
-    try {
-      const fieldRef = doc(db, `users/${user.uid}/fields/${field.id}`);
-      await updateDoc(fieldRef, {
-        status: isCompleted ? 'harvested' : 'concluded',
-        concludedAt: new Date().toISOString(),
-        concludedDay: daysSincePlanting,
-      });
-
-      alert(isCompleted ? '🌾 Field marked as harvested!' : '✓ Field season concluded');
-      onFieldUpdate(); // Refresh field data
-    } catch (error) {
-      console.error('Error concluding field:', error);
-      alert('Failed to update field status');
-    } finally {
-      setIsConcluding(false);
-    }
-  };
-
-  const handleReopenField = async () => {
-    if (!user || !field.id) return;
-    if (!confirm('Reopen this field? This will mark it as active again.')) return;
-
-    setIsConcluding(true);
-    try {
-      const fieldRef = doc(db, `users/${user.uid}/fields/${field.id}`);
-      await updateDoc(fieldRef, {
-        status: 'active',
-        reopenedAt: new Date().toISOString(),
-      });
-
-      alert('✓ Field reopened successfully');
-      onFieldUpdate();
-    } catch (error) {
-      console.error('Error reopening field:', error);
-      alert('Failed to reopen field');
-    } finally {
-      setIsConcluding(false);
-    }
-  };
-
-  const handleStartEditFieldName = () => {
-    setFieldNameValue(field.fieldName || '');
-    setIsEditingFieldName(true);
-  };
-
-  const handleCancelEditFieldName = () => {
-    setIsEditingFieldName(false);
-    setFieldNameValue('');
-  };
-
-  const handleSaveFieldName = async () => {
-    if (!user || !field.id) return;
-    
-    const trimmedName = fieldNameValue.trim();
-    if (!trimmedName) {
-      alert('Field name cannot be empty');
-      return;
-    }
-
-    if (trimmedName === field.fieldName) {
-      setIsEditingFieldName(false);
-      return;
-    }
-
-    setIsSavingFieldName(true);
-    try {
-      const fieldRef = doc(db, `users/${user.uid}/fields/${field.id}`);
-      await updateDoc(fieldRef, {
-        fieldName: trimmedName,
-      });
-
-      setIsEditingFieldName(false);
-      onFieldUpdate(); // Refresh field data
-    } catch (error) {
-      console.error('Error updating field name:', error);
-      alert('Failed to update field name');
-    } finally {
-      setIsSavingFieldName(false);
-    }
-  };
-
-  const handleDeleteField = async () => {
-    if (!user || !field.id) return;
-
-    const confirmMessage = `Are you sure you want to delete "${field.fieldName}"?\n\nThis will permanently delete:\n- The field and all its data\n- All paddies and their logs\n- All task records\n\nThis action cannot be undone.`;
-    
-    if (!confirm(confirmMessage)) return;
-
-    setIsDeleting(true);
-    try {
-      // Delete all paddies and their subcollections
-      const paddiesRef = collection(db, `users/${user.uid}/fields/${field.id}/paddies`);
-      const paddiesSnapshot = await getDocs(paddiesRef);
-      
-      // Delete logs for each paddy
-      for (const paddyDoc of paddiesSnapshot.docs) {
-        const logsRef = collection(db, `users/${user.uid}/fields/${field.id}/paddies/${paddyDoc.id}/logs`);
-        const logsSnapshot = await getDocs(logsRef);
-        for (const logDoc of logsSnapshot.docs) {
-          await deleteDoc(doc(db, `users/${user.uid}/fields/${field.id}/paddies/${paddyDoc.id}/logs/${logDoc.id}`));
-        }
-        // Delete the paddy document
-        await deleteDoc(doc(db, `users/${user.uid}/fields/${field.id}/paddies/${paddyDoc.id}`));
-      }
-
-      // Delete all tasks
-      const tasksRef = collection(db, `users/${user.uid}/fields/${field.id}/tasks`);
-      const tasksSnapshot = await getDocs(tasksRef);
-      for (const taskDoc of tasksSnapshot.docs) {
-        await deleteDoc(doc(db, `users/${user.uid}/fields/${field.id}/tasks/${taskDoc.id}`));
-      }
-
-      // Finally, delete the field document
-      const fieldRef = doc(db, `users/${user.uid}/fields/${field.id}`);
-      await deleteDoc(fieldRef);
-
-      alert('✓ Field deleted successfully');
-      router.push('/'); // Navigate to home
-    } catch (error) {
-      console.error('Error deleting field:', error);
-      alert('Failed to delete field. Please try again.');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="bg-white rounded-xl shadow-md p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-bold text-gray-900">Field Information</h2>
-          {fieldStatus !== 'active' && (
-            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-              fieldStatus === 'harvested' 
-                ? 'bg-green-100 text-green-800' 
-                : 'bg-gray-100 text-gray-800'
-            }`}>
-              {fieldStatus === 'harvested' ? '🌾 Harvested' : '🔚 Season Ended'}
-            </span>
-          )}
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <p className="text-sm text-gray-600">Field Name</p>
-              {!isEditingFieldName && (
-                <button
-                  onClick={handleStartEditFieldName}
-                  className="text-green-600 hover:text-green-700 text-sm font-medium"
-                  title="Edit field name"
-                >
-                  ✏️ Edit
-                </button>
-              )}
             </div>
-            {isEditingFieldName ? (
-              <div className="space-y-2">
-                <Input
-                  type="text"
-                  value={fieldNameValue}
-                  onChange={(e) => setFieldNameValue(e.target.value)}
-                  className="text-lg font-medium"
-                  placeholder="Enter field name"
-                  disabled={isSavingFieldName}
-                  autoFocus
-                />
-                <div className="flex gap-2">
-                  <Button
-                    onClick={handleSaveFieldName}
-                    disabled={isSavingFieldName || !fieldNameValue.trim()}
-                    size="sm"
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    {isSavingFieldName ? 'Saving...' : 'Save'}
-                  </Button>
-                  <Button
-                    onClick={handleCancelEditFieldName}
-                    disabled={isSavingFieldName}
-                    size="sm"
-                    variant="outline"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <p className="text-lg font-medium text-gray-900">{field.fieldName}</p>
-            )}
-          </div>
-          <div>
-            <p className="text-sm text-gray-600 mb-1">Rice Variety</p>
-            <p className="text-lg font-medium text-gray-900">{field.riceVariety}</p>
-          </div>
-          <div>
-            <p className="text-sm text-gray-600 mb-1">Planting Method</p>
-            <p className="text-lg font-medium text-gray-900 capitalize">
-              {field.plantingMethod === 'transplant' ? 'Transplant' : 
-               field.plantingMethod === 'direct-planting' ? 'Direct Planting' :
-               variety?.plantingMethod ? variety.plantingMethod.map(m => m.replace('-', ' ')).join(' / ') :
-               'Not specified'}
-            </p>
-          </div>
-          <div>
-            <p className="text-sm text-gray-600 mb-1">Start Date (Day 0)</p>
-            <p className="text-lg font-medium text-gray-900">
-              {new Date(field.startDay).toLocaleDateString()}
-            </p>
-          </div>
-          <div>
-            <p className="text-sm text-gray-600 mb-1">Current Day</p>
-            <p className="text-lg font-medium text-gray-900">
-              Day {daysSincePlanting}
-            </p>
-          </div>
-          <div>
-            <p className="text-sm text-gray-600 mb-1">Expected Harvest</p>
-            <p className="text-lg font-medium text-gray-900">
-              {expectedHarvest ? new Date(expectedHarvest).toLocaleDateString() : 'N/A'}
-            </p>
-          </div>
-          {field.concludedAt && (
-            <div>
-              <p className="text-sm text-gray-600 mb-1">
-                {fieldStatus === 'harvested' ? 'Harvested On' : 'Concluded On'}
-              </p>
-              <p className="text-lg font-medium text-gray-900">
-                {new Date(field.concludedAt).toLocaleDateString()} (Day {field.concludedDay})
-              </p>
-            </div>
-          )}
-          <div>
-            <p className="text-sm text-gray-600 mb-1">Created</p>
-            <p className="text-lg font-medium text-gray-900">
-              {field.createdAt?.toDate ? new Date(field.createdAt.toDate()).toLocaleDateString() : 'N/A'}
-            </p>
-          </div>
-          {field.description && (
-            <div className="md:col-span-2">
-              <p className="text-sm text-gray-600 mb-1">Description</p>
-              <p className="text-gray-900">{field.description}</p>
-            </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
-
-      {/* Field Actions */}
-      {fieldStatus === 'active' && (
-        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-orange-200 rounded-xl p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">
-            {isCompleted ? '🌾 Ready for Harvest' : '⏸️ End Season Early'}
-          </h3>
-          <p className="text-sm text-gray-700 mb-4">
-            {isCompleted
-              ? 'Your rice has reached maturity. Mark this field as harvested to complete the season.'
-              : `This field is currently on Day ${daysSincePlanting}. You can conclude this season early if needed.`}
-          </p>
-          <button
-            onClick={handleConcludeField}
-            disabled={isConcluding}
-            className={`px-6 py-3 rounded-lg font-medium transition-all ${
-              isCompleted
-                ? 'bg-green-600 hover:bg-green-700 text-white'
-                : 'bg-orange-600 hover:bg-orange-700 text-white'
-            } disabled:bg-gray-400 disabled:cursor-not-allowed`}
-          >
-            {isConcluding ? 'Processing...' : isCompleted ? '🌾 Mark as Harvested' : '🔚 Conclude Field'}
-          </button>
-        </div>
-      )}
-
-      {fieldStatus !== 'active' && (
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">
-            Field is {fieldStatus === 'harvested' ? 'Harvested' : 'Concluded'}
-          </h3>
-          <p className="text-sm text-gray-700 mb-4">
-            This field season has ended. You can reopen it if you need to continue tracking.
-          </p>
-          <button
-            onClick={handleReopenField}
-            disabled={isConcluding}
-            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            {isConcluding ? 'Processing...' : '↻ Reopen Field'}
-          </button>
-        </div>
-      )}
-
-      {/* Delete Field Section */}
-      <div className="bg-red-50 border border-red-200 rounded-xl p-6">
-        <h3 className="text-lg font-semibold text-red-900 mb-2">
-          🗑️ Delete Field
-        </h3>
-        <p className="text-sm text-red-700 mb-4">
-          Permanently delete this field and all associated data including paddies, logs, and task records. This action cannot be undone.
-        </p>
-        <button
-          onClick={handleDeleteField}
-          disabled={isDeleting}
-          className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
-        >
-          {isDeleting ? 'Deleting...' : '🗑️ Delete Field'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Trends Chart Component
-function TrendsChart({ logs }: { logs: Array<{ timestamp: Date; nitrogen?: number; phosphorus?: number; potassium?: number }> }) {
-  
-  const data = useMemo(() => {
-    // Ensure chronological order (oldest → newest)
-    const ordered = [...logs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    const labels = ordered.map((l) => l.timestamp.toLocaleString(undefined, { 
-      month: 'short', 
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }));
-
-    return {
-    labels,
-    datasets: [
-      {
-        label: 'Nitrogen (mg/kg)',
-        data: ordered.map((l) => l.nitrogen ?? null),
-        borderColor: '#2563eb',
-        backgroundColor: 'rgba(37, 99, 235, 0.2)',
-        tension: 0.3,
-        spanGaps: true,
-      },
-      {
-        label: 'Phosphorus (mg/kg)',
-        data: ordered.map((l) => l.phosphorus ?? null),
-        borderColor: '#7c3aed',
-        backgroundColor: 'rgba(124, 58, 237, 0.2)',
-        tension: 0.3,
-        spanGaps: true,
-      },
-      {
-        label: 'Potassium (mg/kg)',
-        data: ordered.map((l) => l.potassium ?? null),
-        borderColor: '#f59e0b',
-        backgroundColor: 'rgba(245, 158, 11, 0.2)',
-        tension: 0.3,
-        spanGaps: true,
-      },
-    ],
-    };
-  }, [logs]);
-
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: {
-      duration: 750,
-    },
-    plugins: {
-      legend: { position: 'top' as const },
-      tooltip: { mode: 'index' as const, intersect: false },
-    },
-    scales: {
-      y: { beginAtZero: true, title: { display: true, text: 'mg/kg' } },
-      x: {
-        ticks: {
-          maxRotation: 45,
-          minRotation: 45
-        }
-      }
-    },
-  };
-
-  return (
-    <div style={{ height: 320 }}>
-      <Line data={data} options={options} />
-    </div>
+    </ProtectedRoute>
   );
 }

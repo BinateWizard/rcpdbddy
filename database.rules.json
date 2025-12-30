@@ -4,9 +4,38 @@
       "$deviceId": {
         // Read: Only authenticated users can read device data
         ".read": "auth != null",
-        // Write: Allow ESP32 to write sensor data (npk, gps, heartbeat, status) without auth
-        // All other writes require authentication
+        // Write: Restricted based on ownership
         ".write": false,
+        // Ownership fields - only owner can write
+        "ownedBy": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!data.exists() || data.val() == auth.uid)"
+        },
+        "connectedTo": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!root.child('devices').child($deviceId).child('ownedBy').exists() || root.child('devices').child($deviceId).child('ownedBy').val() == auth.uid)"
+        },
+        "connectedAt": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!root.child('devices').child($deviceId).child('ownedBy').exists() || root.child('devices').child($deviceId).child('ownedBy').val() == auth.uid)"
+        },
+        "fieldId": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!root.child('devices').child($deviceId).child('ownedBy').exists() || root.child('devices').child($deviceId).child('ownedBy').val() == auth.uid)"
+        },
+        "paddyName": {
+          ".read": "auth != null",
+          ".write": "auth != null && (!root.child('devices').child($deviceId).child('ownedBy').exists() || root.child('devices').child($deviceId).child('ownedBy').val() == auth.uid)"
+        },
+        // Action fields - only owner can write
+        "action": {
+          ".read": "auth != null",
+          ".write": "auth != null && root.child('devices').child($deviceId).child('ownedBy').val() == auth.uid"
+        },
+        "actionTaken": {
+          ".read": "auth != null",
+          ".write": true
+        },
         // NPK sensor data - ESP32 can write, users can read
         "npk": {
           ".read": "auth != null",
@@ -37,10 +66,10 @@
           ".read": "auth != null",
           ".write": true
         },
-        // All other paths require authentication for writes
-        "$other": {
+        // Timestamp - allow ESP32 and owner to write
+        "timestamp": {
           ".read": "auth != null",
-          ".write": "auth != null"
+          ".write": true
         }
       }
     }

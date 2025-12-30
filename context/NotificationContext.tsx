@@ -23,7 +23,7 @@ const NotificationContext = createContext<NotificationContextType>({
 });
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const previousNotificationsRef = useRef<Set<string>>(new Set());
@@ -79,6 +79,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    // Don't query Firestore while auth is still loading
+    if (authLoading) {
+      return;
+    }
+
     if (!user) {
       setNotifications([]);
       setLoading(false);
@@ -137,7 +142,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     });
 
     return () => unsubscribe();
-  }, [user]);
+  }, [user, authLoading]);
 
   const markAsRead = async (notificationId: string) => {
     if (!user) return;

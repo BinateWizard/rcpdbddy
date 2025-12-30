@@ -23,7 +23,7 @@ import { useDeviceMonitoring } from "@/lib/hooks/useDeviceMonitoring";
 const ADMIN_EMAIL = 'ricepaddy.contact@gmail.com';
 
 export default function Home() {
-  const { user, signOut } = useAuth();
+  const { user, signOut, loading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const { visibility } = usePageVisibility();
@@ -33,6 +33,14 @@ export default function Home() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  
+  // Scan modal state
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [scanMode, setScanMode] = useState<"all" | "manual">("all");
+  const [selectedDevices, setSelectedDevices] = useState<Set<string>>(new Set());
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResults, setScanResults] = useState<{[deviceId: string]: {status: string; message: string}}>({});
+  const [allDevicesList, setAllDevicesList] = useState<Array<{deviceId: string; paddyName: string; fieldName: string; fieldId: string}>>([]);
   
   // Step 1 form data
   const [fieldName, setFieldName] = useState("");
@@ -45,6 +53,10 @@ export default function Home() {
   // Step 2 form data
   const [paddyName, setPaddyName] = useState("");
   const [paddyDescription, setPaddyDescription] = useState("");
+  const [paddyShapeType, setPaddyShapeType] = useState<"rectangle" | "trapezoid">("rectangle");
+  const [paddyLength, setPaddyLength] = useState("");
+  const [paddyWidth, setPaddyWidth] = useState("");
+  const [paddyWidth2, setPaddyWidth2] = useState(""); // For trapezoid
   const [deviceId, setDeviceId] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   
@@ -82,6 +94,21 @@ export default function Home() {
     const today = new Date().toISOString().split('T')[0];
     setStartDay(today);
     setErrors(prev => ({...prev, startDay: ""}));
+  };
+  
+  // Calculate area based on paddy shape
+  const calculatePaddyArea = () => {
+    if (!paddyLength) return null;
+    
+    if (paddyShapeType === "rectangle") {
+      if (!paddyWidth) return null;
+      return parseFloat(paddyLength) * parseFloat(paddyWidth);
+    } else if (paddyShapeType === "trapezoid") {
+      if (!paddyWidth || !paddyWidth2) return null;
+      // Trapezoid area = (width1 + width2) / 2 * length
+      return ((parseFloat(paddyWidth) + parseFloat(paddyWidth2)) / 2) * parseFloat(paddyLength);
+    }
+    return null;
   };
   
   const fetchFields = async () => {
@@ -181,6 +208,24 @@ export default function Home() {
         healthyDevices,
         issueDevices
       });
+      
+      // Build devices list for scan modal
+      const devicesList: Array<{deviceId: string; paddyName: string; fieldName: string; fieldId: string}> = [];
+      fieldsData.forEach((field: any) => {
+        if (field.paddies) {
+          field.paddies.forEach((paddy: any) => {
+            if (paddy.deviceId) {
+              devicesList.push({
+                deviceId: paddy.deviceId,
+                paddyName: paddy.paddyName,
+                fieldName: field.fieldName,
+                fieldId: field.id
+              });
+            }
+          });
+        }
+      });
+      setAllDevicesList(devicesList);
     } catch (error) {
       console.error("Error fetching fields:", error);
     } finally {
@@ -189,8 +234,15 @@ export default function Home() {
   };
   
   useEffect(() => {
-    fetchFields();
-  }, [user]);
+    // Only fetch if auth is loaded and user exists
+    if (!loading && user) {
+      fetchFields();
+    } else if (!loading && !user) {
+      // Clear fields if not authenticated
+      setFields([]);
+      setLoadingFields(false);
+    }
+  }, [user, loading]);
 
   // Monitor all devices for offline status
   useDeviceMonitoring(
@@ -205,6 +257,116 @@ export default function Home() {
       })) || []
     )
   );
+  
+  // Handle scan selected devices
+  const handleScanDevices = async () => {
+    const devicesToScan = scanMode === 'all' 
+      ? allDevicesList.map(d => d.deviceId)
+      : Array.from(selectedDevices);
+
+    if (devicesToScan.length === 0) {
+      alert('Please select at least one device to scan');
+      return;
+    }
+
+    setIsScanning(true);
+    setScanResults({});
+
+    try {
+      const { executeDeviceAction } = await import('@/lib/utils/deviceActions');
+      const { ref, get } = await import('firebase/database');
+
+      const scanPromises = devicesToScan.map(async (deviceId) => {
+        try {
+          // Execute scan on device
+          await executeDeviceAction(deviceId, 'scan', 15000);
+          
+          // Fetch NPK data from RTDB after successful scan
+          const npkRef = ref(database, `devices/${deviceId}/npk`);
+          const npkSnap = await get(npkRef);
+          
+          if (npkSnap.exists()) {
+            const npkData = npkSnap.val();
+            return {
+              deviceId,
+              npk: {
+                n: npkData.n,
+                p: npkData.p,
+                k: npkData.k
+              },
+              timestamp: npkData.timestamp
+            };
+          }
+          return { deviceId, npk: null };
+        } catch (err) {
+          return {
+            error: true,
+            deviceId,
+            message: (err as any).message
+          };
+        }
+      });
+
+      const results = await Promise.all(scanPromises);
+      const newResults: {[deviceId: string]: {status: string; message: string; npk?: any}} = {};
+
+      results.forEach((result: any) => {
+        const deviceId = result.deviceId;
+        
+        if (result.error) {
+          newResults[deviceId] = {
+            status: 'error',
+            message: `✗ ${result.message || 'Scan failed'}`
+          };
+        } else if (result.npk) {
+          newResults[deviceId] = {
+            status: 'success',
+            message: `✓ N: ${result.npk.n} | P: ${result.npk.p} | K: ${result.npk.k}`,
+            npk: result.npk
+          };
+        } else {
+          newResults[deviceId] = {
+            status: 'success',
+            message: `✓ Scan completed (no NPK data)`
+          };
+        }
+      });
+
+      setScanResults(newResults);
+
+      // Auto-close modal after 4 seconds if all successful
+      const allSuccessful = Object.values(newResults).every(r => r.status === 'success');
+      if (allSuccessful) {
+        setTimeout(() => {
+          closeScanModal();
+        }, 4000);
+      }
+    } catch (error: any) {
+      console.error('Scan error:', error);
+      alert('Failed to scan devices');
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  const closeScanModal = async () => {
+    // Reset action to "none" for all devices when closing
+    const { resetDeviceAction } = await import('@/lib/utils/deviceActions');
+    for (const device of allDevicesList) {
+      try {
+        await resetDeviceAction(device.deviceId);
+      } catch (error) {
+        console.error(`Error resetting action for ${device.deviceId}:`, error);
+      }
+    }
+    
+    setIsScanModalOpen(false);
+    setTimeout(() => {
+      setScanMode('all');
+      setSelectedDevices(new Set());
+      setScanResults({});
+    }, 300);
+  };
   
   const handleStep2Submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,6 +388,10 @@ export default function Home() {
       return;
     }
     
+     await createFieldWithDevice();
+  };
+
+  const createFieldWithDevice = async () => {
     // Verify device exists in RTDB
     setIsVerifying(true);
     try {
@@ -238,8 +404,15 @@ export default function Home() {
         return;
       }
       
-      // Check if device is already connected to another user
+      // Check if device is already owned by another user
       const deviceData = deviceSnap.val();
+      if (deviceData?.ownedBy && deviceData.ownedBy !== user?.uid) {
+        setErrors({ deviceId: "Device is already owned by another user. Access restricted due to policy changes." });
+        setIsVerifying(false);
+        return;
+      }
+      
+      // Check if device is already connected to another user
       if (deviceData?.connectedTo && deviceData.connectedTo !== user?.uid) {
         setErrors({ deviceId: "Device is already connected to another user" });
         setIsVerifying(false);
@@ -276,16 +449,26 @@ export default function Home() {
       
       // 3. Create paddy (device connection) under the field
       const paddiesRef = collection(db, "users", user.uid, "fields", fieldDoc.id, "paddies");
+      const areaM2 = calculatePaddyArea();
+      const areaHectares = areaM2 ? areaM2 / 10000 : null;
+      
       await addDoc(paddiesRef, {
         paddyName,
         description: paddyDescription,
         deviceId,
+        shapeType: paddyShapeType,
+        length: paddyLength ? parseFloat(paddyLength) : null,
+        width: paddyWidth ? parseFloat(paddyWidth) : null,
+        width2: paddyShapeType === "trapezoid" && paddyWidth2 ? parseFloat(paddyWidth2) : null,
+        areaM2: areaM2,
+        areaHectares: areaHectares,
         connectedAt: serverTimestamp(),
         status: "connected"
       });
       
       // 4. Update device in RTDB to mark it as connected to this user
       await update(deviceRef, {
+        ownedBy: user.uid,
         connectedTo: user.uid,
         connectedAt: new Date().toISOString(),
         fieldId: fieldDoc.id,
@@ -318,6 +501,61 @@ export default function Home() {
       setIsVerifying(false);
     }
   };
+
+  const createFieldWithoutDevice = async () => {
+    if (!user) {
+      alert("Session error. Please try again");
+      return;
+    }
+
+    setIsVerifying(true);
+    try {
+      // 1. Create or update user document
+      const userRef = doc(db, "users", user.uid);
+      await setDoc(userRef, {
+        email: user.email,
+        displayName: user.displayName || "",
+        photoURL: user.photoURL || "",
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      
+      // 2. Create field document (without paddies)
+      const fieldsRef = collection(db, "users", user.uid, "fields");
+      await addDoc(fieldsRef, {
+        fieldName,
+        description: fieldDescription,
+        riceVariety,
+        plantingMethod,
+        startDay,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+      
+      setErrors({});
+      setIsVerifying(false);
+      
+      // Close modal and refresh fields list
+      closeModal();
+      fetchFields();
+    } catch (error: any) {
+      console.error("Error creating field:", error);
+      
+      let errorMessage = "Failed to create field. Please try again";
+      
+      if (error?.code === 'permission-denied') {
+        errorMessage = "Permission denied. Please check your account access";
+      } else if (error?.code === 'unavailable') {
+        errorMessage = "Network error. Please check your connection";
+      } else if (error?.code === 'unauthenticated') {
+        errorMessage = "Authentication error. Please sign in again";
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
+      setErrors({ submit: errorMessage });
+      setIsVerifying(false);
+    }
+  };
   
   const closeModal = () => {
     setIsModalOpen(false);
@@ -330,6 +568,10 @@ export default function Home() {
       setStartDay("");
       setPaddyName("");
       setPaddyDescription("");
+      setPaddyShapeType("rectangle");
+      setPaddyLength("");
+      setPaddyWidth("");
+      setPaddyWidth2("");
       setDeviceId("");
       setErrors({});
     }, 300); // Reset after animation
@@ -350,6 +592,23 @@ export default function Home() {
                 <h1 className="text-xl font-bold text-white" style={{ fontFamily: "'Courier New', Courier, monospace" }}>PadBuddy</h1>
               </div>
               <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    if (allDevicesList.length === 0) {
+                      alert('No devices available to scan. Add devices to your fields first.');
+                    } else {
+                      setIsScanModalOpen(true);
+                    }
+                  }}
+                  className="hover:bg-white/20 text-white"
+                  title="Scan all devices"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -792,6 +1051,87 @@ export default function Home() {
                           </p>
                         )}
                       </div>
+
+                      {/* Paddy Dimensions */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Field Shape
+                        </label>
+                        <select
+                          value={paddyShapeType}
+                          onChange={(e) => setPaddyShapeType(e.target.value as "rectangle" | "trapezoid")}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900 mb-3"
+                        >
+                          <option value="rectangle">Rectangle</option>
+                          <option value="trapezoid">Trapezoid (varying width)</option>
+                        </select>
+                        <p className="text-xs text-gray-500 mb-4">
+                          {paddyShapeType === "rectangle" 
+                            ? "For rectangular fields with uniform width"
+                            : "For fields where one end is wider than the other"}
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-3">
+                          Paddy Dimensions (for NPK calculation)
+                        </label>
+                        <div className="grid grid-cols-2 gap-3 mb-3">
+                          <div>
+                            <label className="block text-xs text-gray-600 mb-1">Length (m)</label>
+                            <input
+                              type="number"
+                              value={paddyLength}
+                              onChange={(e) => setPaddyLength(e.target.value)}
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900"
+                              placeholder="e.g., 50"
+                              step="0.1"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-600 mb-1">
+                              {paddyShapeType === "rectangle" ? "Width (m)" : "Width 1 (m)"}
+                            </label>
+                            <input
+                              type="number"
+                              value={paddyWidth}
+                              onChange={(e) => setPaddyWidth(e.target.value)}
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900"
+                              placeholder="e.g., 40"
+                              step="0.1"
+                            />
+                          </div>
+                        </div>
+                        
+                        {paddyShapeType === "trapezoid" && (
+                          <div className="mb-3">
+                            <label className="block text-xs text-gray-600 mb-1">Width 2 (m)</label>
+                            <input
+                              type="number"
+                              value={paddyWidth2}
+                              onChange={(e) => setPaddyWidth2(e.target.value)}
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900"
+                              placeholder="e.g., 45"
+                              step="0.1"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">Width at the other end of the field</p>
+                          </div>
+                        )}
+                        
+                        {calculatePaddyArea() && (
+                          <div className="mt-3 space-y-1.5 p-3 bg-green-50 rounded-lg border border-green-200">
+                            <p className="text-sm text-green-700 font-medium">
+                              📐 Area: {calculatePaddyArea()?.toFixed(2)} m²
+                            </p>
+                            <p className="text-sm text-emerald-700 font-medium">
+                              🌾 Hectares: {((calculatePaddyArea() || 0) / 10000).toFixed(4)} ha
+                            </p>
+                          </div>
+                        )}
+                        <p className="text-xs text-gray-500 mt-2">
+                          Enter the dimensions of your paddy field to help calculate NPK fertilizer requirements.
+                        </p>
+                      </div>
                       
                       <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                         <p className="text-sm text-gray-600 flex items-center gap-2">
@@ -830,8 +1170,17 @@ export default function Home() {
                             Connecting...
                           </>
                         ) : (
-                          'Connect'
+                          'Connect Device'
                         )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={createFieldWithoutDevice}
+                        disabled={isVerifying}
+                        className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 py-3 rounded-xl font-medium text-base transition-all transform hover:-translate-y-0.5 mt-3 disabled:bg-gray-300 disabled:cursor-not-allowed disabled:transform-none"
+                      >
+                        Add Devices Later
                       </button>
                     </form>
                   </div>
@@ -1084,6 +1433,186 @@ export default function Home() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Scan Devices Modal */}
+        {isScanModalOpen && (
+          <>
+            {/* Glassmorphism Overlay */}
+            <div 
+              onClick={closeScanModal}
+              className="fixed inset-0 backdrop-blur-sm bg-black/20 z-40 transition-all"
+            />
+            
+            {/* Bottom Sheet */}
+            <div className="fixed inset-x-0 bottom-0 z-50 animate-slide-up">
+              <div className="bg-white rounded-t-3xl shadow-2xl max-h-[70vh] flex flex-col border-t-4 border-green-500">
+                {/* Handle Bar */}
+                <div className="flex justify-center pt-3 pb-4">
+                  <div className="w-12 h-1.5 bg-green-300 rounded-full" />
+                </div>
+                
+                {/* Modal Content */}
+                <div className="flex-1 overflow-hidden px-6 pb-6">
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-2xl font-bold text-gray-900">Scan Devices</h2>
+                    <button
+                      onClick={closeScanModal}
+                      className="text-gray-400 hover:text-gray-600 transition-colors"
+                    >
+                      <X className="w-6 h-6" />
+                    </button>
+                  </div>
+
+                  {/* Scan Results */}
+                  {Object.keys(scanResults).length > 0 && (
+                    <div className="mb-6 space-y-2 overflow-y-auto max-h-[200px]">
+                      {Object.entries(scanResults).map(([deviceId, result]) => {
+                        const device = allDevicesList.find(d => d.deviceId === deviceId);
+                        return (
+                          <div
+                            key={deviceId}
+                            className={`p-3 rounded-lg border ${
+                              result.status === 'success'
+                                ? 'bg-green-50 border-green-200'
+                                : 'bg-red-50 border-red-200'
+                            }`}
+                          >
+                            <p className="text-sm font-medium text-gray-900">
+                              {device?.paddyName} ({device?.fieldName})
+                            </p>
+                            <p className={`text-sm ${
+                              result.status === 'success' ? 'text-green-700' : 'text-red-700'
+                            }`}>
+                              {result.message}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Mode Selection */}
+                  {Object.keys(scanResults).length === 0 && (
+                    <>
+                      <div className="mb-6 flex gap-3">
+                        <button
+                          onClick={() => {
+                            setScanMode('all');
+                            setSelectedDevices(new Set());
+                          }}
+                          className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
+                            scanMode === 'all'
+                              ? 'bg-green-600 text-white shadow-lg'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Scan All
+                        </button>
+                        <button
+                          onClick={() => setScanMode('manual')}
+                          className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
+                            scanMode === 'manual'
+                              ? 'bg-green-600 text-white shadow-lg'
+                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        >
+                          Select Manually
+                        </button>
+                      </div>
+
+                      {/* Device List (if manual mode) */}
+                      {scanMode === 'manual' && (
+                        <div className="mb-6 space-y-2 overflow-y-auto max-h-[250px]">
+                          {allDevicesList.length === 0 ? (
+                            <p className="text-gray-500 text-center py-4">No devices available</p>
+                          ) : (
+                            allDevicesList.map((device) => (
+                              <label
+                                key={device.deviceId}
+                                className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedDevices.has(device.deviceId)}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedDevices);
+                                    if (e.target.checked) {
+                                      newSelected.add(device.deviceId);
+                                    } else {
+                                      newSelected.delete(device.deviceId);
+                                    }
+                                    setSelectedDevices(newSelected);
+                                  }}
+                                  className="w-5 h-5 text-green-600 rounded cursor-pointer"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-gray-900">{device.paddyName}</p>
+                                  <p className="text-xs text-gray-600">{device.fieldName}</p>
+                                </div>
+                                <span className="text-xs font-mono text-gray-500">{device.deviceId}</span>
+                              </label>
+                            ))
+                          )}
+                        </div>
+                      )}
+
+                      {/* Scan Summary */}
+                      {scanMode === 'all' && (
+                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                          <p className="text-sm text-blue-700">
+                            Ready to scan <span className="font-bold">{allDevicesList.length}</span> device{allDevicesList.length > 1 ? 's' : ''}
+                          </p>
+                        </div>
+                      )}
+
+                      {scanMode === 'manual' && (
+                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                          <p className="text-sm text-blue-700">
+                            Selected <span className="font-bold">{selectedDevices.size}</span> device{selectedDevices.size !== 1 ? 's' : ''}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Scan Button */}
+                      <button
+                        onClick={handleScanDevices}
+                        disabled={isScanning || (scanMode === 'manual' && selectedDevices.size === 0)}
+                        className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
+                      >
+                        {isScanning ? (
+                          <>
+                            <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Scanning...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                            </svg>
+                            Scan Now
+                          </>
+                        )}
+                      </button>
+                    </>
+                  )}
+
+                  {/* Results Footer */}
+                  {Object.keys(scanResults).length > 0 && (
+                    <button
+                      onClick={closeScanModal}
+                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 mt-4"
+                    >
+                      Done
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </ProtectedRoute>
   );
