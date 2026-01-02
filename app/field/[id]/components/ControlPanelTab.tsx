@@ -115,9 +115,9 @@ export default function ControlPanelTab({ paddies = [], fieldId, deviceReadings 
             ]);
             return { 
               id: paddy.deviceId, 
-              label: paddy.name || `Paddy ${paddy.id}`,
+              label: paddy.paddyName || `Paddy ${paddy.id}`,
               paddyId: paddy.id,
-              paddyName: paddy.name,
+              paddyName: paddy.paddyName,
               status, 
               gps, 
               npk 
