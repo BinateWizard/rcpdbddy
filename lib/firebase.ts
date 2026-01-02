@@ -49,3 +49,5 @@ if (typeof window !== "undefined" && 'serviceWorker' in navigator) {
 }
 
 export { app, auth, db, database, analytics, messaging };
+// Alias for compatibility with code expecting 'firestore' export
+export const firestore = db;

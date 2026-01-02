@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "apply-patch-step-2",
+			"type": "shell",
+			"command": "node -e \"console.log('noop')\"",
+			"isBackground": false
+		}
+	]
+}

@@ -31,7 +31,7 @@ export function TrendsChart({ logs }: TrendsChartProps) {
           borderColor: '#2563eb',
           backgroundColor: 'rgba(37, 99, 235, 0.2)',
           tension: 0.3,
-          spanGaps: true,
+          spanGaps: false,
         },
         {
           label: 'Phosphorus (mg/kg)',
@@ -39,7 +39,7 @@ export function TrendsChart({ logs }: TrendsChartProps) {
           borderColor: '#7c3aed',
           backgroundColor: 'rgba(124, 58, 237, 0.2)',
           tension: 0.3,
-          spanGaps: true,
+          spanGaps: false,
         },
         {
           label: 'Potassium (mg/kg)',
@@ -47,7 +47,7 @@ export function TrendsChart({ logs }: TrendsChartProps) {
           borderColor: '#f59e0b',
           backgroundColor: 'rgba(245, 158, 11, 0.2)',
           tension: 0.3,
-          spanGaps: true,
+          spanGaps: false,
         },
       ],
     };

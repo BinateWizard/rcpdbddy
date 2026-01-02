@@ -3,14 +3,14 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db, database } from '@/lib/firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { ref, onValue } from 'firebase/database';
 import { TrendsChart } from './TrendsChart';
 
 // Helper function to check device status
 function getDeviceStatus(paddy: any, deviceReadings: any[]) {
   const deviceReading = deviceReadings.find(r => r.deviceId === paddy.deviceId);
-  
+
   if (!deviceReading) {
     return {
       status: 'offline',
@@ -19,55 +19,41 @@ function getDeviceStatus(paddy: any, deviceReadings: any[]) {
       badge: 'Offline'
     };
   }
-  
+
   const deviceStatus = deviceReading.status || 'disconnected';
-  const hasNPK = deviceReading.npk && (
-    deviceReading.npk.n !== undefined || 
-    deviceReading.npk.p !== undefined || 
-    deviceReading.npk.k !== undefined
-  );
-  
-  // Check if device has recent NPK timestamp (within last 10 minutes)
+
+  // Prefer npk.timestamp as the source of truth for sensor freshness. Heartbeat alone (no timestamp)
+  // should not mark the device as producing fresh sensor data.
+  const OFFLINE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
   let hasRecentNPK = false;
-  if (deviceReading.npk?.timestamp) {
-    const npkTimestamp = deviceReading.npk.timestamp;
-    // Handle both seconds and milliseconds timestamps
-    const npkTime = npkTimestamp < 10000000000 ? npkTimestamp * 1000 : npkTimestamp;
-    const timeSinceNPK = Date.now() - npkTime;
-    hasRecentNPK = timeSinceNPK < 10 * 60 * 1000; // 10 minutes
+  let npkTimestampMs: number | null = null;
+  if (deviceReading.npk?.timestamp !== undefined && deviceReading.npk?.timestamp !== null) {
+    const raw = Number(deviceReading.npk.timestamp);
+    const ms = raw < 10000000000 ? raw * 1000 : raw;
+    npkTimestampMs = ms;
+    hasRecentNPK = (Date.now() - ms) < OFFLINE_THRESHOLD_MS;
   }
-  
-  // Device is online if:
-  // 1. Status is 'connected' or 'alive' (ESP32 sends 'alive')
-  // 2. OR has recent NPK readings (within 10 minutes)
-  const isOnline = deviceStatus === 'connected' || 
-                   deviceStatus === 'alive' || 
-                   hasRecentNPK;
-  
-  if (!isOnline) {
-    return {
-      status: 'offline',
-      message: 'Device is offline. Check power supply and network connection.',
-      color: 'red',
-      badge: 'Offline'
-    };
+
+  // If we have a recent npk timestamp, device is OK and sensors present
+  if (hasRecentNPK) {
+    const hasNPKValues = deviceReading.npk && (
+      deviceReading.npk.n !== undefined ||
+      deviceReading.npk.p !== undefined ||
+      deviceReading.npk.k !== undefined
+    );
+    if (!hasNPKValues) {
+      return { status: 'sensor-issue', message: 'Device online but no NPK values', color: 'yellow', badge: 'Sensor Issue' };
+    }
+    return { status: 'ok', message: 'Device and sensors are working properly.', color: 'green', badge: 'Connected' };
   }
-  
-  if (isOnline && !hasNPK) {
-    return {
-      status: 'sensor-issue',
-      message: 'Device is online but sensors are not reporting data. Check sensor connections.',
-      color: 'yellow',
-      badge: 'Sensor Issue'
-    };
+
+  // No recent npk timestamp: if device reports 'connected' or 'alive' treat as sensor-issue (heartbeat present but no readings)
+  if (deviceStatus === 'connected' || deviceStatus === 'alive') {
+    return { status: 'sensor-issue', message: 'Device connected but no recent NPK readings', color: 'yellow', badge: 'Sensor Issue' };
   }
-  
-  return {
-    status: 'ok',
-    message: 'Device and sensors are working properly.',
-    color: 'green',
-    badge: 'Connected'
-  };
+
+  // Otherwise treat as offline
+  return { status: 'offline', message: 'Device is offline. Check power supply and network connection.', color: 'red', badge: 'Offline' };
 }
 
 // Statistics Tab Component
@@ -88,6 +74,7 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
     humidity: { current: number | null; average: number | null; min: number | null; max: number | null };
   } | null>(null);
   const [hasInitialized, setHasInitialized] = useState(false);
+  const [useStaticMode, setUseStaticMode] = useState(true);
   
   // Calculate field-level statistics from current device readings AND historical logs
   useEffect(() => {
@@ -243,12 +230,16 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
       const npkRef = ref(database, `devices/${paddy.deviceId}/npk`);
       const unsubscribe = onValue(npkRef, (snapshot) => {
         if (!snapshot.exists()) return;
-        
+
         const data = snapshot.val();
-        const timestamp = data.timestamp && data.timestamp > 1700000000000 
-          ? new Date(data.timestamp) 
-          : new Date();
-        
+        // Normalize timestamp: handle seconds or milliseconds
+        let timestamp = new Date();
+        if (data.timestamp !== undefined && data.timestamp !== null) {
+          const raw = Number(data.timestamp);
+          const ms = raw < 10000000000 ? raw * 1000 : raw; // seconds -> ms
+          timestamp = new Date(ms);
+        }
+
         if (data.n !== undefined || data.p !== undefined || data.k !== undefined) {
           const newLog = {
             id: `rtdb-${paddy.deviceId}-${Date.now()}`,
@@ -267,6 +258,15 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
             const filtered = prev.filter(log => log.deviceId !== paddy.deviceId || log._src !== 'rtdb');
             return [...filtered, newLog].slice(-20); // Keep last 20 real-time entries
           });
+            // Update deviceReadings so frontend uses npk.timestamp as last-seen and shows correct status
+            setDeviceReadings((prev: any[]) => {
+              const found = prev.find(r => r.deviceId === paddy.deviceId);
+              if (found) {
+                return prev.map(r => r.deviceId === paddy.deviceId ? { ...r, npk: { ...r.npk, ...data }, timestamp } : r);
+              }
+              // not found -> add
+              return [...prev, { deviceId: paddy.deviceId, paddyId: paddy.id, npk: data, timestamp }];
+            });
         }
       });
 
@@ -336,13 +336,13 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
     }
   }, [user, paddies, hasInitialized]);
 
-  // Real-time Firestore listeners for historical logs
+  // Firestore listeners / static fetch for historical logs
   useEffect(() => {
     if (!user || paddies.length === 0) {
       setIsLoadingLogs(false);
       return;
     }
-    
+
     setIsLoadingLogs(true);
 
     const now = new Date();
@@ -354,7 +354,6 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
       case 'all': startDate = new Date(0); break;
     }
 
-    const unsubscribers: (() => void)[] = [];
     let latestLogs: any[] = [];
     let initializedCount = 0;
     const totalPaddies = paddies.length;
@@ -365,21 +364,95 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
       }
       const sorted = latestLogs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
       setHistoricalLogs(sorted);
-      // Only set loading to false after all paddies have initialized
       if (initializedCount >= totalPaddies || !isInitial) {
         setIsLoadingLogs(false);
       }
     };
 
+    // Static mode: fetch once using getDocs for each paddy
+    if (useStaticMode) {
+      (async () => {
+        try {
+          for (const paddy of paddies) {
+            const logsRef = collection(db, `users/${user.uid}/fields/${fieldId}/paddies/${paddy.id}/logs`);
+            const q = timeRange === 'all' ? logsRef : query(logsRef, where('timestamp', '>=', startDate));
+            try {
+              const snap = await getDocs(q);
+              const arr: any[] = [];
+              snap.forEach((doc) => {
+                const data: any = doc.data();
+                let logDate: Date;
+                if (data.timestamp && typeof data.timestamp.toDate === 'function') {
+                  logDate = data.timestamp.toDate();
+                } else if (typeof data.timestamp === 'number') {
+                  const raw = data.timestamp;
+                  const ms = raw < 10000000000 ? raw * 1000 : raw;
+                  logDate = new Date(ms);
+                } else if (typeof data.timestamp === 'string' && !Number.isNaN(Number(data.timestamp))) {
+                  const raw = Number(data.timestamp);
+                  const ms = raw < 10000000000 ? raw * 1000 : raw;
+                  logDate = new Date(ms);
+                } else {
+                  logDate = new Date();
+                }
+                if (logDate >= startDate) {
+                  arr.push({
+                    ...data,
+                    id: doc.id,
+                    paddyId: paddy.id,
+                    paddyName: paddy.paddyName,
+                    timestamp: logDate,
+                    _src: 'paddy'
+                  });
+                }
+              });
+
+              // Merge this paddy's logs
+              latestLogs = latestLogs.filter(log => log.paddyId !== paddy.id || log._src !== 'paddy');
+              latestLogs = [...latestLogs, ...arr];
+            } catch (err) {
+              console.error(`Error fetching logs for ${paddy.id}:`, err);
+            } finally {
+              initializedCount++;
+            }
+          }
+
+          mergeAndSet(false);
+        } catch (err) {
+          console.error('Error in static logs fetch:', err);
+          setIsLoadingLogs(false);
+        }
+      })();
+
+      // No real-time unsubscribers in static mode
+      return;
+    }
+
+    // Live mode: use onSnapshot listeners
+    const unsubscribers: (() => void)[] = [];
+
     paddies.forEach((paddy) => {
       const logsRef = collection(db, `users/${user.uid}/fields/${fieldId}/paddies/${paddy.id}/logs`);
       const q = timeRange === 'all' ? logsRef : query(logsRef, where('timestamp', '>=', startDate));
-      
+
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const arr: any[] = [];
         snapshot.forEach((doc) => {
           const data: any = doc.data();
-          const logDate = data.timestamp?.toDate?.() || new Date(data.timestamp);
+          let logDate: Date;
+          if (data.timestamp && typeof data.timestamp.toDate === 'function') {
+            logDate = data.timestamp.toDate();
+          } else if (typeof data.timestamp === 'number') {
+            const raw = data.timestamp;
+            const ms = raw < 10000000000 ? raw * 1000 : raw;
+            logDate = new Date(ms);
+          } else if (typeof data.timestamp === 'string' && !Number.isNaN(Number(data.timestamp))) {
+            const raw = Number(data.timestamp);
+            const ms = raw < 10000000000 ? raw * 1000 : raw;
+            logDate = new Date(ms);
+          } else {
+            logDate = new Date();
+          }
           if (logDate >= startDate) {
             arr.push({ 
               ...data, 
@@ -391,12 +464,10 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
             });
           }
         });
-        
-        // Update logs for this paddy
+
         latestLogs = latestLogs.filter(log => log.paddyId !== paddy.id || log._src !== 'paddy');
         latestLogs = [...latestLogs, ...arr];
-        
-        // Check if this is the first snapshot (initial load)
+
         const isInitial = initializedCount < totalPaddies;
         mergeAndSet(isInitial);
       }, (err) => {
@@ -415,7 +486,7 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
         try { unsub(); } catch {}
       });
     };
-  }, [user, fieldId, paddies, timeRange]);
+  }, [user, fieldId, paddies, timeRange, useStaticMode]);
   
   return (
     <div className="space-y-4">
@@ -458,14 +529,15 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
             <h3 className="text-xs font-semibold text-gray-700">Nitrogen (N)</h3>
             <span className="text-xl">🧪</span>
           </div>
+          <p className="text-xs text-gray-500 font-semibold mb-1">Field Avg</p>
           <p className="text-xl font-bold text-gray-900">
-            {fieldStats && fieldStats.nitrogen.current !== null && fieldStats.nitrogen.current !== undefined
-              ? Math.round(fieldStats.nitrogen.current)
+            {fieldStats && fieldStats.nitrogen.average !== null && fieldStats.nitrogen.average !== undefined
+              ? Math.round(fieldStats.nitrogen.average)
               : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">mg/kg</p>
-          {fieldStats && fieldStats.nitrogen.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.nitrogen.average)}</p>
+          {fieldStats && fieldStats.nitrogen.current !== null && fieldStats.nitrogen.current !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">Latest: {Math.round(fieldStats.nitrogen.current)}</p>
           )}
         </div>
 
@@ -475,14 +547,15 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
             <h3 className="text-xs font-semibold text-gray-700">Phosphorus (P)</h3>
             <span className="text-xl">⚗️</span>
           </div>
+          <p className="text-xs text-gray-500 font-semibold mb-1">Field Avg</p>
           <p className="text-xl font-bold text-gray-900">
-            {fieldStats && fieldStats.phosphorus.current !== null && fieldStats.phosphorus.current !== undefined
-              ? Math.round(fieldStats.phosphorus.current)
+            {fieldStats && fieldStats.phosphorus.average !== null && fieldStats.phosphorus.average !== undefined
+              ? Math.round(fieldStats.phosphorus.average)
               : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">mg/kg</p>
-          {fieldStats && fieldStats.phosphorus.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.phosphorus.average)}</p>
+          {fieldStats && fieldStats.phosphorus.current !== null && fieldStats.phosphorus.current !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">Latest: {Math.round(fieldStats.phosphorus.current)}</p>
           )}
         </div>
 
@@ -492,46 +565,49 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
             <h3 className="text-xs font-semibold text-gray-700">Potassium (K)</h3>
             <span className="text-xl">🔬</span>
           </div>
+          <p className="text-xs text-gray-500 font-semibold mb-1">Field Avg</p>
           <p className="text-xl font-bold text-gray-900">
-            {fieldStats && fieldStats.potassium.current !== null && fieldStats.potassium.current !== undefined
-              ? Math.round(fieldStats.potassium.current)
+            {fieldStats && fieldStats.potassium.average !== null && fieldStats.potassium.average !== undefined
+              ? Math.round(fieldStats.potassium.average)
               : '--'}
           </p>
           <p className="text-xs text-gray-500 mt-1">mg/kg</p>
-          {fieldStats && fieldStats.potassium.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.potassium.average)}</p>
+          {fieldStats && fieldStats.potassium.current !== null && fieldStats.potassium.current !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">Latest: {Math.round(fieldStats.potassium.current)}</p>
           )}
         </div>
 
         {/* Temperature Card */}
-        <div className={`rounded-lg shadow-md p-4 ${fieldStats && fieldStats.temperature.current !== null ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+        <div className={`rounded-lg shadow-md p-4 ${fieldStats && fieldStats.temperature.average !== null ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-semibold text-gray-600">Temperature</h3>
             <span className="text-xl">🌡️</span>
           </div>
-          <p className={`text-xl font-bold ${fieldStats && fieldStats.temperature.current !== null ? 'text-orange-600' : 'text-gray-600'}`}>
-            {fieldStats && fieldStats.temperature.current !== null && fieldStats.temperature.current !== undefined
-              ? `${Math.round(fieldStats.temperature.current)}°C`
+          <p className="text-xs text-gray-500 font-semibold mb-1">Field Avg</p>
+          <p className={`text-xl font-bold ${fieldStats && fieldStats.temperature.average !== null ? 'text-orange-600' : 'text-gray-600'}`}>
+            {fieldStats && fieldStats.temperature.average !== null && fieldStats.temperature.average !== undefined
+              ? `${Math.round(fieldStats.temperature.average)}°C`
               : '--'}
           </p>
-          {fieldStats && fieldStats.temperature.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.temperature.average)}°C</p>
+          {fieldStats && fieldStats.temperature.current !== null && fieldStats.temperature.current !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">Latest: {Math.round(fieldStats.temperature.current)}°C</p>
           )}
         </div>
 
         {/* Humidity Card */}
-        <div className={`rounded-lg shadow-md p-4 ${fieldStats && fieldStats.humidity.current !== null ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+        <div className={`rounded-lg shadow-md p-4 ${fieldStats && fieldStats.humidity.average !== null ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-semibold text-gray-600">Humidity</h3>
             <span className="text-xl">💧</span>
           </div>
-          <p className={`text-xl font-bold ${fieldStats && fieldStats.humidity.current !== null ? 'text-blue-600' : 'text-gray-600'}`}>
-            {fieldStats && fieldStats.humidity.current !== null && fieldStats.humidity.current !== undefined
-              ? `${Math.round(fieldStats.humidity.current)}%`
+          <p className="text-xs text-gray-500 font-semibold mb-1">Field Avg</p>
+          <p className={`text-xl font-bold ${fieldStats && fieldStats.humidity.average !== null ? 'text-blue-600' : 'text-gray-600'}`}>
+            {fieldStats && fieldStats.humidity.average !== null && fieldStats.humidity.average !== undefined
+              ? `${Math.round(fieldStats.humidity.average)}%`
               : '--'}
           </p>
-          {fieldStats && fieldStats.humidity.average !== null && (
-            <p className="text-xs text-gray-400 mt-1">Avg: {Math.round(fieldStats.humidity.average)}%</p>
+          {fieldStats && fieldStats.humidity.current !== null && fieldStats.humidity.current !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">Latest: {Math.round(fieldStats.humidity.current)}%</p>
           )}
         </div>
 
@@ -625,15 +701,93 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
               <p className="text-gray-500">Loading historical data...</p>
             </div>
           ) : (() => {
+            // Count active devices (using npk.timestamp-based status)
+            const activeDevicesCount = paddies.filter(p => getDeviceStatus(p, deviceReadings).status === 'ok').length;
+
+            if (activeDevicesCount === 0) {
+              return (
+                <div className="text-center py-8">
+                  <div className="text-5xl mb-3">⚠️</div>
+                  <p className="text-lg font-semibold text-gray-900">No active devices</p>
+                  <p className="text-sm text-gray-500 mt-2">No devices are currently sending recent NPK readings. Check device connectivity or wait for data to arrive.</p>
+                </div>
+              );
+            }
             // Merge historical and real-time logs, dedupe, sort
-            const allLogs = [...historicalLogs, ...realtimeLogs];
-            const seen = new Set<string>();
-            const deduped = allLogs.filter(log => {
-              const key = `${Math.floor(log.timestamp.getTime() / 1000)}-${log.paddyId || log.deviceId}`;
-              if (seen.has(key)) return false;
-              seen.add(key);
+            // 1) Build latest historical timestamp per paddy
+            const latestHistoricalByPaddy: Record<string, number> = historicalLogs.reduce((acc, log) => {
+              if (!log.paddyId) return acc;
+              const t = log.timestamp.getTime();
+              acc[log.paddyId] = Math.max(acc[log.paddyId] || 0, t);
+              return acc;
+            }, {} as Record<string, number>);
+
+            // 2) Compute startDate for the selected timeRange (match Firestore query behavior)
+            const nowRender = new Date();
+            let startDateRender = new Date();
+            switch (timeRange) {
+              case '7d': startDateRender.setDate(nowRender.getDate() - 7); break;
+              case '30d': startDateRender.setDate(nowRender.getDate() - 30); break;
+              case '90d': startDateRender.setDate(nowRender.getDate() - 90); break;
+              case 'all': startDateRender = new Date(0); break;
+            }
+
+            // 3) Filter realtime logs: keep only those newer than the latest historical for the same paddy
+            //    and that fall within the selected timeRange (to avoid including old RTDB entries)
+            const filteredRealtime = realtimeLogs.filter((log) => {
+              if (!log.paddyId) return false; // ignore malformed
+              const latestHist = latestHistoricalByPaddy[log.paddyId];
+              const t = log.timestamp.getTime();
+              // Must be within selected time window
+              if (t < startDateRender.getTime()) return false;
+              // Keep realtime log only if it's newer than the latest historical for that paddy
+              if (latestHist && t <= latestHist) return false;
               return true;
             });
+
+            // Insert gap markers for paddies currently considered offline so the chart shows discontinuities
+            const gapEntries: any[] = [];
+            paddies.forEach((paddy) => {
+              if (!paddy.id) return;
+              const latestHist = latestHistoricalByPaddy[paddy.id];
+              // Only create a gap if we have historical data and the paddy is offline
+              if (latestHist) {
+                const status = getDeviceStatus(paddy, deviceReadings);
+                if (status.status !== 'ok') {
+                  gapEntries.push({
+                    id: `gap-${paddy.id}-${latestHist + 1}`,
+                    timestamp: new Date(latestHist + 1000),
+                    nitrogen: null,
+                    phosphorus: null,
+                    potassium: null,
+                    paddyId: paddy.id,
+                    paddyName: paddy.paddyName,
+                    _src: 'gap'
+                  });
+                }
+              }
+            });
+
+            const allLogs = [...historicalLogs, ...filteredRealtime, ...gapEntries];
+
+            // 4) Deduplicate by paddy/device + second-precision timestamp, preferring historical ('paddy') over 'rtdb'
+            const mergedByKey = new Map<string, any>();
+            for (const log of allLogs) {
+              const key = `${Math.floor(log.timestamp.getTime() / 1000)}-${log.paddyId || log.deviceId}`;
+              if (!mergedByKey.has(key)) {
+                mergedByKey.set(key, log);
+                continue;
+              }
+              const existing = mergedByKey.get(key);
+              // If either is from 'paddy', prefer that one (historical). Otherwise keep the first.
+              if (existing._src === 'paddy') continue;
+              if (log._src === 'paddy') {
+                mergedByKey.set(key, log);
+              }
+            }
+
+            const deduped = Array.from(mergedByKey.values());
+
             const sortedLogs = deduped
               .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime()); // Newest first
             const chartLogs = sortedLogs
@@ -663,10 +817,17 @@ export function StatisticsTab({ paddies, deviceReadings, fieldId, setDeviceReadi
                         }</span>
                       )}
                     </p>
-                    <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                      <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                      Live updates enabled
-                    </p>
+                    {useStaticMode ? (
+                      <p className="text-xs text-yellow-600 mt-1 flex items-center gap-1">
+                        <span className="inline-block w-2 h-2 bg-yellow-400 rounded-full"></span>
+                        Live updates disabled (static)
+                      </p>
+                    ) : (
+                      <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                        <span className="inline-block w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                        Live updates enabled
+                      </p>
+                    )}
                   </div>
                 </div>
 

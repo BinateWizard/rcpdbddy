@@ -33,7 +33,7 @@ import { Search } from 'lucide-react';
 import { OverviewTab } from './components/OverviewTab';
 import { PaddiesTab } from './components/PaddiesTab';
 import { StatisticsTab } from './components/StatisticsTab';
-import { ControlPanelTab } from './components/ControlPanelTab';
+import ControlPanelTab from './components/ControlPanelTab';
 import { InformationTab } from './components/InformationTab';
 
 /**
@@ -106,10 +106,6 @@ export default function FieldDetail() {
   const [locationData, setLocationData] = useState<{lat: number; lng: number; timestamp?: any} | null>(null);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const [otherDevicesHaveLocation, setOtherDevicesHaveLocation] = useState(false);
-  
-  // Header scan state
-  const [isHeaderScanning, setIsHeaderScanning] = useState(false);
-  const [headerScanResult, setHeaderScanResult] = useState<{status: string; message: string; timestamp: number} | null>(null);
   
   // Scan modal state
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
@@ -216,18 +212,18 @@ export default function FieldDetail() {
         if (result.error) {
           newResults[paddyId] = {
             status: 'error',
-            message: `âœ— ${result.message || 'Scan failed'}`
+            message: `✗ ${result.message || 'Scan failed'}`
           };
         } else if (result.npk) {
           newResults[paddyId] = {
             status: 'success',
-            message: `âœ“ N: ${result.npk.n} | P: ${result.npk.p} | K: ${result.npk.k}`,
+            message: `✓ N: ${result.npk.n} | P: ${result.npk.p} | K: ${result.npk.k}`,
             npk: result.npk
           };
         } else {
           newResults[paddyId] = {
             status: 'success',
-            message: `âœ“ Scan completed (no NPK data)`
+            message: `✓ Scan completed (no NPK data)`
           };
         }
       });
@@ -268,70 +264,8 @@ export default function FieldDetail() {
     }, 300);
   };
 
-  // Handle scan all devices (old function - for compatibility)
-  const handleScanAllDevices = async () => {
-    if (paddies.length === 0) {
-      alert('No paddies connected to scan');
-      return;
-    }
-
-    setIsHeaderScanning(true);
-    setHeaderScanResult(null);
-
-    try {
-      const { executeDeviceAction } = await import('@/lib/utils/deviceActions');
-      const scanPromises = paddies.map(paddy => 
-        executeDeviceAction(paddy.deviceId, 'scan', 15000).catch(err => ({
-          error: true,
-          paddyId: paddy.id,
-          message: err.message
-        }))
-      );
-
-      const results = await Promise.all(scanPromises);
-      const failures = results.filter(r => (r as any).error);
-      const successes = results.filter(r => !(r as any).error);
-
-      if (successes.length === paddies.length) {
-        setHeaderScanResult({
-          status: 'success',
-          message: `âœ“ All ${paddies.length} device${paddies.length > 1 ? 's' : ''} scanned successfully`,
-          timestamp: Date.now()
-        });
-      } else if (failures.length === paddies.length) {
-        setHeaderScanResult({
-          status: 'error',
-          message: `âœ— Failed to scan all devices`,
-          timestamp: Date.now()
-        });
-      } else {
-        setHeaderScanResult({
-          status: 'partial',
-          message: `âš  Scanned ${successes.length}/${paddies.length} devices`,
-          timestamp: Date.now()
-        });
-
-      }
-
-      // Clear result after 5 seconds
-      setTimeout(() => {
-        setHeaderScanResult(null);
-      }, 5000);
-    } catch (error: any) {
-      console.error('Scan error:', error);
-      setHeaderScanResult({
-        status: 'error',
-        message: `âœ— Scan failed: ${error?.message || 'Unknown error'}`,
-        timestamp: Date.now()
-      });
-
-      setTimeout(() => {
-        setHeaderScanResult(null);
-      }, 5000);
-    } finally {
-      setIsHeaderScanning(false);
-    }
-  };
+  // Scan all devices function is moved to statistics tab
+  // const handleScanAllDevices = async () => { ... };
 
   useEffect(() => {
     const fetchFieldData = async () => {
@@ -606,52 +540,21 @@ export default function FieldDetail() {
                 <span className="font-bold text-gray-900">{field.fieldName}</span>
               </div>
               
-              {/* Scan Button and Field Status Badge */}
+              {/* Field Status Badges */}
               <div className="flex items-center gap-2">
-                {paddies.length > 0 && (
-                  <button
-                    onClick={handleScanButtonClick}
-                    disabled={isHeaderScanning}
-                    title={`Scan all ${paddies.length} device${paddies.length > 1 ? 's' : ''}`}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 hover:text-green-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {isHeaderScanning ? (
-                      <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                      </svg>
-                    )}
-                    <span className="text-xs font-medium">Scan</span>
-                  </button>
-                )}
                 {field.status === 'harvested' && (
                   <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                    ðŸŒ¾ Harvested
+                    🌾 Harvested
                   </span>
                 )}
                 {field.status === 'concluded' && (
                   <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                    ðŸ”š Season Ended
+                    🔚 Season Ended
                   </span>
                 )}
               </div>
             </div>
-            {/* Scan Result Feedback */}
-            {headerScanResult && (
-              <div className={`mt-2 px-4 py-3 rounded-lg text-sm font-medium animate-fade-in ${
-                headerScanResult.status === 'success' 
-                  ? 'bg-green-50 text-green-700 border border-green-200'
-                  : headerScanResult.status === 'partial'
-                  ? 'bg-yellow-50 text-yellow-700 border border-yellow-200'
-                  : 'bg-red-50 text-red-700 border border-red-200'
-              }`}>
-                {headerScanResult.message}
-              </div>
-            )}
+            {/* Field Status badges moved to tab - no header scan UI */}
           </div>
         </nav>
 
@@ -661,19 +564,18 @@ export default function FieldDetail() {
             {/* Overview Tab */}
             <button
               onClick={() => setActiveTab('overview')}
-              className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 ${
+              className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
                 activeTab === 'overview'
-                  ? 'text-green-600'
-                  : 'text-gray-400 hover:text-gray-600'
+                  ? 'text-emerald-600'
+                  : 'text-gray-400 hover:text-emerald-600'
               }`}
             >
               {/* Active Indicator */}
               <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
-                activeTab === 'overview' ? 'bg-green-600' : 'bg-transparent'
+                activeTab === 'overview' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
-              {/* Icon */}
-              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'overview' ? 'scale-110' : ''}`} fill={activeTab === 'overview' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'overview' ? 0 : 2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'overview' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'overview' ? 2 : 1.5} d="M3 10.5L12 4l9 6.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1V10.5z" />
               </svg>
               {/* Label - only show when active */}
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
@@ -684,17 +586,17 @@ export default function FieldDetail() {
             {/* Paddies Tab */}
             <button
               onClick={() => setActiveTab('paddies')}
-              className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 ${
+              className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
                 activeTab === 'paddies'
-                  ? 'text-green-600'
-                  : 'text-gray-400 hover:text-gray-600'
+                  ? 'text-emerald-600'
+                  : 'text-gray-400 hover:text-emerald-600'
               }`}
             >
               <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
-                activeTab === 'paddies' ? 'bg-green-600' : 'bg-transparent'
+                activeTab === 'paddies' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
-              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'paddies' ? 'scale-110' : ''}`} fill={activeTab === 'paddies' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'paddies' ? 0 : 2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'paddies' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'paddies' ? 2 : 1.5} d="M12 2c4 0 7 3 7 7a7 7 0 11-14 0c0-4 3-7 7-7zM5 20c1.5-2 4-3 7-3s5.5 1 7 3" />
               </svg>
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
                 activeTab === 'paddies' ? 'opacity-100' : 'opacity-0 h-0'
@@ -705,17 +607,17 @@ export default function FieldDetail() {
             {hasDevices && (
               <button
                 onClick={() => setActiveTab('statistics')}
-                className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 ${
+                className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
                   activeTab === 'statistics'
-                    ? 'text-green-600'
-                    : 'text-gray-400 hover:text-gray-600'
+                    ? 'text-emerald-600'
+                    : 'text-gray-400 hover:text-emerald-600'
                 }`}
               >
                 <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
-                  activeTab === 'statistics' ? 'bg-green-600' : 'bg-transparent'
+                  activeTab === 'statistics' ? 'bg-emerald-600' : 'bg-transparent'
                 }`} />
-                <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'statistics' ? 'scale-110' : ''}`} fill={activeTab === 'statistics' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'statistics' ? 0 : 2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'statistics' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'statistics' ? 2 : 1.5} d="M7 16V10M12 16V7M17 16V13" />
                 </svg>
                 <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
                   activeTab === 'statistics' ? 'opacity-100' : 'opacity-0 h-0'
@@ -733,10 +635,11 @@ export default function FieldDetail() {
               }`}
             >
               <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
-                activeTab === 'information' ? 'bg-green-600' : 'bg-transparent'
+                activeTab === 'information' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
-              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'information' ? 'scale-110' : ''}`} fill={activeTab === 'information' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'information' ? 0 : 2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'information' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="9" strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'information' ? 2 : 1.5} />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'information' ? 2 : 1.5} d="M12 8h.01M12 11v5" />
               </svg>
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
                 activeTab === 'information' ? 'opacity-100' : 'opacity-0 h-0'
@@ -753,10 +656,10 @@ export default function FieldDetail() {
               }`}
             >
               <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
-                activeTab === 'control-panel' ? 'bg-green-600' : 'bg-transparent'
+                activeTab === 'control-panel' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
-              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'control-panel' ? 'scale-110' : ''}`} fill={activeTab === 'control-panel' ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'control-panel' ? 0 : 2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'control-panel' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'control-panel' ? 2 : 1.5} d="M12 8a4 4 0 100 8 4 4 0 000-8zm8 4c0 .7-.1 1.4-.3 2l1.8 1.4-2 3.5-2.1-.8a8.1 8.1 0 01-1.6.9L14.7 21h-5.4l-.9-2.8c-.6-.2-1.1-.5-1.6-.9l-2.1.8-2-3.5L4.3 14c-.2-.6-.3-1.3-.3-2s.1-1.4.3-2L2.5 8.6l2-3.5 2.1.8c.5-.4 1-.7 1.6-.9L9.3 3h5.4l.9 2.8c.6.2 1.1.5 1.6.9l2.1-.8 2 3.5-1.8 1.4c.2.6.3 1.3.3 2z" />
               </svg>
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
                 activeTab === 'control-panel' ? 'opacity-100' : 'opacity-0 h-0'
@@ -844,7 +747,7 @@ export default function FieldDetail() {
                 : 'opacity-0 translate-y-4 absolute inset-0 pointer-events-none'
             }`}>
               {activeTab === 'control-panel' && (
-                <ControlPanelTab paddies={paddies} deviceReadings={deviceReadings} fieldId={fieldId} />
+                <ControlPanelTab />
               )}
             </div>
           </div>
@@ -1101,186 +1004,7 @@ export default function FieldDetail() {
           </>
         )}
 
-        {/* Scan Devices Modal */}
-        {isScanModalOpen && (
-          <>
-            {/* Glassmorphism Overlay */}
-            <div 
-              onClick={closeScanModal}
-              className="fixed inset-0 backdrop-blur-sm bg-black/20 z-40 transition-all"
-            />
-            
-            {/* Bottom Sheet */}
-            <div className="fixed inset-x-0 bottom-0 z-50 animate-slide-up">
-              <div className="bg-white rounded-t-3xl shadow-2xl max-h-[70vh] flex flex-col border-t-4 border-green-500">
-                {/* Handle Bar */}
-                <div className="flex justify-center pt-3 pb-4">
-                  <div className="w-12 h-1.5 bg-green-300 rounded-full" />
-                </div>
-                
-                {/* Modal Content */}
-                <div className="flex-1 overflow-hidden px-6 pb-6">
-                  <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-2xl font-bold text-gray-900">Scan Devices</h2>
-                    <button
-                      onClick={closeScanModal}
-                      className="text-gray-400 hover:text-gray-600 transition-colors"
-                    >
-                      <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
 
-                  {/* Scan Results */}
-                  {Object.keys(scanResults).length > 0 && (
-                    <div className="mb-6 space-y-2 overflow-y-auto max-h-[200px]">
-                      {Object.entries(scanResults).map(([paddyId, result]) => {
-                        const paddy = paddies.find(p => p.id === paddyId);
-                        return (
-                          <div
-                            key={paddyId}
-                            className={`p-3 rounded-lg border ${
-                              result.status === 'success'
-                                ? 'bg-green-50 border-green-200'
-                                : 'bg-red-50 border-red-200'
-                            }`}
-                          >
-                            <p className="text-sm font-medium text-gray-900">
-                              {paddy?.paddyName}
-                            </p>
-                            <p className={`text-sm ${
-                              result.status === 'success' ? 'text-green-700' : 'text-red-700'
-                            }`}>
-                              {result.message}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Mode Selection */}
-                  {Object.keys(scanResults).length === 0 && (
-                    <>
-                      <div className="mb-6 flex gap-3">
-                        <button
-                          onClick={() => {
-                            setScanMode('all');
-                            setSelectedDevices(new Set());
-                          }}
-                          className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
-                            scanMode === 'all'
-                              ? 'bg-green-600 text-white shadow-lg'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
-                        >
-                          Scan All
-                        </button>
-                        <button
-                          onClick={() => setScanMode('manual')}
-                          className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
-                            scanMode === 'manual'
-                              ? 'bg-green-600 text-white shadow-lg'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
-                        >
-                          Select Manually
-                        </button>
-                      </div>
-
-                      {/* Device List (if manual mode) */}
-                      {scanMode === 'manual' && (
-                        <div className="mb-6 space-y-2 overflow-y-auto max-h-[250px]">
-                          {paddies.length === 0 ? (
-                            <p className="text-gray-500 text-center py-4">No devices available</p>
-                          ) : (
-                            paddies.map((paddy) => (
-                              <label
-                                key={paddy.id}
-                                className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedDevices.has(paddy.id)}
-                                  onChange={(e) => {
-                                    const newSelected = new Set(selectedDevices);
-                                    if (e.target.checked) {
-                                      newSelected.add(paddy.id);
-                                    } else {
-                                      newSelected.delete(paddy.id);
-                                    }
-                                    setSelectedDevices(newSelected);
-                                  }}
-                                  className="w-5 h-5 text-green-600 rounded cursor-pointer"
-                                />
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-gray-900">{paddy.paddyName}</p>
-                                  <p className="text-xs text-gray-600">{paddy.deviceId}</p>
-                                </div>
-                              </label>
-                            ))
-                          )}
-                        </div>
-                      )}
-
-                      {/* Scan Summary */}
-                      {scanMode === 'all' && (
-                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                          <p className="text-sm text-blue-700">
-                            Ready to scan <span className="font-bold">{paddies.length}</span> device{paddies.length > 1 ? 's' : ''}
-                          </p>
-                        </div>
-                      )}
-
-                      {scanMode === 'manual' && (
-                        <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                          <p className="text-sm text-blue-700">
-                            Selected <span className="font-bold">{selectedDevices.size}</span> device{selectedDevices.size !== 1 ? 's' : ''}
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Scan Button */}
-                      <button
-                        onClick={handleScanDevices}
-                        disabled={isScanning || (scanMode === 'manual' && selectedDevices.size === 0)}
-                        className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2"
-                      >
-                        {isScanning ? (
-                          <>
-                            <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Scanning...
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                            </svg>
-                            Scan Now
-                          </>
-                        )}
-                      </button>
-                    </>
-                  )}
-
-                  {/* Results Footer */}
-                  {Object.keys(scanResults).length > 0 && (
-                    <button
-                      onClick={closeScanModal}
-                      className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white py-4 rounded-xl font-bold text-lg hover:from-green-700 hover:to-emerald-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 mt-4"
-                    >
-                      Done
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </>
-        )}
       </div>
     </ProtectedRoute>
   );

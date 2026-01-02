@@ -30,7 +30,9 @@
         // Action fields - only owner can write
         "action": {
           ".read": "auth != null",
-          ".write": "auth != null && root.child('devices').child($deviceId).child('ownedBy').val() == auth.uid"
+          // Allow authenticated users (the app UI) to request actions (e.g. ask device to fetch GPS)
+          // Device ownership checks are still enforced for other sensitive writes elsewhere.
+          ".write": "auth != null"
         },
         "actionTaken": {
           ".read": "auth != null",
@@ -71,6 +73,14 @@
           ".read": "auth != null",
           ".write": true
         }
+      }
+    }
+    ,
+    "control_panel_logs": {
+      "$logId": {
+        ".read": "auth != null",
+        // Allow authenticated users (clients or functions) to push logs
+        ".write": "auth != null"
       }
     }
   }
