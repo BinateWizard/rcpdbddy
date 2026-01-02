@@ -18,10 +18,21 @@ import {
 export type AlertSeverity = 'critical' | 'warning' | 'info';
 export type AlertType = 'npk_low' | 'npk_high' | 'device_offline' | 'water_level' | 'anomaly';
 
+export interface Alert {
+  id: string;
+  severity: AlertSeverity;
+  type: AlertType;
+  message: string;
+  createdAt: Timestamp | null;
+  read: boolean;
+  acknowledged: boolean;
+  [key: string]: unknown;
+}
+
 /**
  * Get recent alerts for a field
  */
-export async function getRecentAlerts(fieldId: string, maxResults = 10) {
+export async function getRecentAlerts(fieldId: string, maxResults = 10): Promise<Alert[]> {
   try {
     const alertsRef = collection(db, 'alerts', fieldId, 'alerts');
     const q = query(alertsRef, orderBy('createdAt', 'desc'), limit(maxResults));
@@ -29,7 +40,7 @@ export async function getRecentAlerts(fieldId: string, maxResults = 10) {
     return snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    }));
+    } as Alert));
   } catch (error) {
     console.error('Error fetching recent alerts:', error);
     return [];
@@ -39,7 +50,7 @@ export async function getRecentAlerts(fieldId: string, maxResults = 10) {
 /**
  * Get unacknowledged critical alerts
  */
-export async function getCriticalAlerts(fieldId: string) {
+export async function getCriticalAlerts(fieldId: string): Promise<Alert[]> {
   try {
     const alertsRef = collection(db, 'alerts', fieldId, 'alerts');
     const q = query(
@@ -52,7 +63,7 @@ export async function getCriticalAlerts(fieldId: string) {
     return snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    }));
+    } as Alert));
   } catch (error) {
     console.error('Error fetching critical alerts:', error);
     return [];
@@ -62,7 +73,7 @@ export async function getCriticalAlerts(fieldId: string) {
 /**
  * Get alerts by type
  */
-export async function getAlertsByType(fieldId: string, type: AlertType) {
+export async function getAlertsByType(fieldId: string, type: AlertType): Promise<Alert[]> {
   try {
     const alertsRef = collection(db, 'alerts', fieldId, 'alerts');
     const q = query(alertsRef, where('type', '==', type), orderBy('createdAt', 'desc'));
@@ -70,7 +81,7 @@ export async function getAlertsByType(fieldId: string, type: AlertType) {
     return snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    }));
+    } as Alert));
   } catch (error) {
     console.error(`Error fetching ${type} alerts:`, error);
     return [];
@@ -80,7 +91,7 @@ export async function getAlertsByType(fieldId: string, type: AlertType) {
 /**
  * Get alerts for a specific device
  */
-export async function getDeviceAlerts(fieldId: string, deviceId: string) {
+export async function getDeviceAlerts(fieldId: string, deviceId: string): Promise<Alert[]> {
   try {
     const alertsRef = collection(db, 'alerts', fieldId, 'alerts');
     const q = query(alertsRef, where('deviceId', '==', deviceId), orderBy('createdAt', 'desc'));
@@ -88,7 +99,7 @@ export async function getDeviceAlerts(fieldId: string, deviceId: string) {
     return snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    }));
+    } as Alert));
   } catch (error) {
     console.error('Error fetching device alerts:', error);
     return [];
@@ -98,7 +109,7 @@ export async function getDeviceAlerts(fieldId: string, deviceId: string) {
 /**
  * Get alerts for a specific paddy
  */
-export async function getPaddyAlerts(fieldId: string, paddyId: string) {
+export async function getPaddyAlerts(fieldId: string, paddyId: string): Promise<Alert[]> {
   try {
     const alertsRef = collection(db, 'alerts', fieldId, 'alerts');
     const q = query(alertsRef, where('paddyId', '==', paddyId), orderBy('createdAt', 'desc'));
@@ -106,7 +117,7 @@ export async function getPaddyAlerts(fieldId: string, paddyId: string) {
     return snapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    }));
+    } as Alert));
   } catch (error) {
     console.error('Error fetching paddy alerts:', error);
     return [];

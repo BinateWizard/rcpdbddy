@@ -604,7 +604,7 @@ export function InformationTab({ field, onFieldUpdate }: InformationTabProps) {
             onClick={handleMapClick}
             className="flex-1 relative overflow-hidden cursor-crosshair bg-gray-100"
             style={{
-              backgroundImage: `url('https://maps.googleapis.com/maps/api/staticmap?center=${mapCenter.lat},${mapCenter.lng}&zoom=18&size=1200x800&style=feature:all|element:labels|visibility:off&maptype=roadmap&key=AIzaSyA7VRJbNFKRIWe9Dz01dRrT3CIiLI4SvPk')`,
+              backgroundImage: `url('https://maps.googleapis.com/maps/api/staticmap?center=${mapCenter.lat},${mapCenter.lng}&zoom=18&size=1200x800&style=feature:all|element:labels|visibility:off&maptype=roadmap&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}')`,
               backgroundSize: 'cover',
               backgroundPosition: 'center'
             }}
