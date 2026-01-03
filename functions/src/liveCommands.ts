@@ -18,10 +18,13 @@ const COMMAND_TIMEOUT = 30 * 1000; // 30 seconds
  * - Handles timeouts
  */
 export const verifyLiveCommand = functions.database
-  .ref('/devices/{deviceId}/commands/{commandId}')
+  .ref('/devices/{deviceId}/commands/{nodeId}/{relayId}')
   .onWrite(async (change, context) => {
     const deviceId = context.params.deviceId;
-    const commandId = context.params.commandId;
+    const nodeId = context.params.nodeId;
+    const relayId = context.params.relayId;
+    
+    console.log(`[Command Verify] Triggered for ${deviceId}/${nodeId}/${relayId}`);
     
     // Skip if command was deleted
     if (!change.after.exists()) {
@@ -31,7 +34,7 @@ export const verifyLiveCommand = functions.database
     const commandData = change.after.val();
     const previousData = change.before.exists() ? change.before.val() : null;
     
-    console.log(`[Command Verify] Command ${commandId} for device ${deviceId}`);
+    console.log(`[Command Verify] Command ${relayId} for device ${deviceId}`);
     
     try {
       const firestore = admin.firestore();
@@ -58,7 +61,7 @@ export const verifyLiveCommand = functions.database
       if (!statusChanged) {
         // New command created, schedule timeout check
         if (!previousData) {
-          console.log(`[Command Verify] New command ${commandId}, scheduling timeout check`);
+          console.log(`[Command Verify] New command ${relayId}, scheduling timeout check`);
           
           // Schedule a timeout check (using a different approach since we can't delay in this function)
           // The scheduled function checkCommandTimeouts will handle this
@@ -83,7 +86,7 @@ export const verifyLiveCommand = functions.database
           actualState: success ? relayState : 'FAILED',
           success: success,
           timestamp: Date.now(),
-          commandId: commandId,
+          commandId: relayId,
           functionTriggered: 'verifyLiveCommand',
           userId: deviceData.ownerId,
           details: {
@@ -99,7 +102,7 @@ export const verifyLiveCommand = functions.database
           .collection('logs')
           .add(logData);
         
-        console.log(`[Command Verify] Logged ${success ? 'SUCCESS' : 'FAILURE'} for command ${commandId}`);
+        console.log(`[Command Verify] Logged ${success ? 'SUCCESS' : 'FAILURE'} for ${nodeId}/${relayId}`);
         
         // Store relay state in RTDB for device recovery on boot
         console.log(`[Command Verify] Checking relay state storage - success: ${success}, relay: ${commandData.relay}, actualState: ${commandData.actualState}`);
@@ -139,7 +142,7 @@ export const verifyLiveCommand = functions.database
               timestamp: Date.now(),
               read: false,
               deviceId: deviceId,
-              commandId: commandId
+              commandId: relayId
             });
             
             if (notifications.length > 50) {
@@ -153,16 +156,16 @@ export const verifyLiveCommand = functions.database
         }
       }
       
-      return { success: true, commandId, status: commandData.status };
+      return { success: true, commandId: relayId, status: commandData.status };
       
     } catch (error: any) {
-      console.error(`[Command Verify] Error verifying command ${commandId}:`, error);
+      console.error(`[Command Verify] Error verifying command ${relayId}:`, error);
       
       // Log error to system logs
       await admin.firestore().collection('systemLogs').add({
         functionName: 'verifyLiveCommand',
         deviceId,
-        commandId,
+        commandId: relayId,
         error: error.message,
         stack: error.stack,
         timestamp: admin.firestore.FieldValue.serverTimestamp()

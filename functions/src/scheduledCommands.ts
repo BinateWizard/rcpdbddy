@@ -179,7 +179,9 @@ async function executeCommand(
       commandData.nodeId,
       scheduledCommand.ownerId,
       scheduledCommand.fieldId,
-      30000 // 30 second timeout
+      30000, // 30 second timeout
+      commandData.role,
+      commandData.relay
     );
     
     if (result.completed) {
@@ -309,7 +311,9 @@ async function waitForCommandCompletion(
   nodeId: string,
   ownerId: string,
   fieldId: string | undefined,
-  timeout: number
+  timeout: number,
+  commandType?: string,
+  relayNumber?: number
 ): Promise<{ completed: boolean; acknowledged: boolean; completedAt?: number; acknowledgedAt?: number; result?: any }> {
   const database = admin.database();
   const startTime = Date.now();
@@ -323,7 +327,11 @@ async function waitForCommandCompletion(
   let acknowledgedAt: number | undefined;
   
   while (Date.now() - startTime < timeout) {
-    const commandSnapshot = await database.ref(`${devicePath}/commands/${nodeId}`).once('value');
+    // For relay commands, check the specific relay path
+    const commandPath = (commandType === 'relay' && relayNumber)
+      ? `${devicePath}/commands/${nodeId}/relay${relayNumber}`
+      : `${devicePath}/commands/${nodeId}`;
+    const commandSnapshot = await database.ref(commandPath).once('value');
     
     if (commandSnapshot.exists()) {
       const command = commandSnapshot.val();

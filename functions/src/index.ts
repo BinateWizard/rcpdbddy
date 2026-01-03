@@ -629,8 +629,12 @@ export const sendDeviceCommand = functions.https.onCall(async (data, context) =>
     }
 
     // Write command to RTDB
+    const commandPath = (role === 'relay' && params.relay)
+      ? `commands/${nodeId}/relay${params.relay}`
+      : `commands/${nodeId}`;
+    
     await deviceRef.update({
-      [`commands/${nodeId}`]: commandData,
+      [commandPath]: commandData,
       [`audit/lastCommand`]: action,
       [`audit/lastCommandBy`]: userId,
       [`audit/lastCommandAt`]: now
@@ -650,10 +654,14 @@ export const sendDeviceCommand = functions.https.onCall(async (data, context) =>
 
     console.log(`[Command] Sent to ${deviceId}/${nodeId}: ${action} by ${userId}`);
 
+    const responsePath = (role === 'relay' && params.relay)
+      ? `devices/${deviceId}/commands/${nodeId}/relay${params.relay}`
+      : `devices/${deviceId}/commands/${nodeId}`;
+    
     return {
       success: true,
       message: `Command ${action} sent to ${deviceId}`,
-      commandPath: `devices/${deviceId}/commands/${nodeId}`,
+      commandPath: responsePath,
       timestamp: now
     };
 

@@ -78,14 +78,20 @@ export async function sendDeviceCommand(
 
     // Write directly to RTDB
     const deviceRef = ref(database, `devices/${deviceId}`);
+    
+    // For relay commands, write to relay-specific path
+    const commandPath = (role === 'relay' && params.relay) 
+      ? `commands/${nodeId}/relay${params.relay}`
+      : `commands/${nodeId}`;
+    
     await update(deviceRef, {
-      [`commands/${nodeId}`]: commandData,
+      [commandPath]: commandData,
       [`audit/lastCommand`]: action,
       [`audit/lastCommandBy`]: userId,
       [`audit/lastCommandAt`]: now
     });
 
-    console.log(`[Live Command] Sent to ${deviceId}/${nodeId}: ${action}`, commandData);
+    console.log(`[Live Command] Sent to ${deviceId}/${commandPath}: ${action}`, commandData);
 
     // Log command to Firestore for audit trail
     try {
@@ -112,7 +118,10 @@ export async function sendDeviceCommand(
 
     // Wait for ESP32 to complete the command (up to 30 seconds)
     // This shows "waiting" state in UI
-    const completionResult = await waitForCommandComplete(deviceId, nodeId, 30000);
+    const relayPath = (role === 'relay' && params.relay) 
+      ? `relay${params.relay}`
+      : undefined;
+    const completionResult = await waitForCommandComplete(deviceId, nodeId, 30000, relayPath);
 
     if (completionResult.completed) {
       // Success - update log
@@ -216,14 +225,18 @@ export async function sendDeviceCommand(
 async function waitForCommandComplete(
   deviceId: string,
   nodeId: 'ESP32A' | 'ESP32B' | 'ESP32C',
-  timeout: number
+  timeout: number,
+  relayPath?: string
 ): Promise<{ completed: boolean; executedAt?: number; error?: string }> {
   const startTime = Date.now();
   const pollInterval = 500; // Check every 500ms
 
   while (Date.now() - startTime < timeout) {
     try {
-      const commandRef = ref(database, `devices/${deviceId}/commands/${nodeId}`);
+      const commandPath = relayPath 
+        ? `devices/${deviceId}/commands/${nodeId}/${relayPath}`
+        : `devices/${deviceId}/commands/${nodeId}`;
+      const commandRef = ref(database, commandPath);
       const snapshot = await get(commandRef);
 
       if (snapshot.exists()) {
@@ -231,13 +244,13 @@ async function waitForCommandComplete(
         
         // ESP32 sets status to "completed" when done
         if (command.status === 'completed' && command.executedAt) {
-          console.log(`[Command] Completed by ${deviceId}/${nodeId}`, command);
+          console.log(`[Command] Completed by ${deviceId}/${nodeId}${relayPath ? '/' + relayPath : ''}`, command);
           return { completed: true, executedAt: command.executedAt };
         }
         
         // Check for error status
         if (command.status === 'error') {
-          console.error(`[Command] Error from ${deviceId}/${nodeId}`, command);
+          console.error(`[Command] Error from ${deviceId}/${nodeId}${relayPath ? '/' + relayPath : ''}`, command);
           return { completed: false, error: command.error || 'Unknown error' };
         }
       }
@@ -249,7 +262,7 @@ async function waitForCommandComplete(
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
   }
 
-  console.warn(`[Command] Timeout waiting for ${deviceId}/${nodeId}`);
+  console.warn(`[Command] Timeout waiting for ${deviceId}/${nodeId}${relayPath ? '/' + relayPath : ''}`);
   return { completed: false };
 }
 
@@ -405,10 +418,14 @@ export const relayCommands = {
  */
 export async function getCommandStatus(
   deviceId: string,
-  nodeId: 'ESP32A' | 'ESP32B' | 'ESP32C'
+  nodeId: 'ESP32A' | 'ESP32B' | 'ESP32C',
+  relayNumber?: number
 ): Promise<DeviceCommand | null> {
   try {
-    const commandRef = ref(database, `devices/${deviceId}/commands/${nodeId}`);
+    const commandPath = relayNumber 
+      ? `devices/${deviceId}/commands/${nodeId}/relay${relayNumber}`
+      : `devices/${deviceId}/commands/${nodeId}`;
+    const commandRef = ref(database, commandPath);
     const snapshot = await get(commandRef);
 
     if (snapshot.exists()) {
