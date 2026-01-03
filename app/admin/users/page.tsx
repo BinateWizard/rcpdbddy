@@ -51,6 +51,9 @@ export default function AdminUsers() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -78,6 +81,9 @@ export default function AdminUsers() {
   }, [user]);
 
   const fetchUsers = async () => {
+    setIsRefreshing(true);
+    setSuccessMessage('');
+    setShowSuccess(false);
     try {
       const usersRef = collection(db, 'users');
       const usersSnapshot = await getDocs(usersRef);
@@ -105,8 +111,16 @@ export default function AdminUsers() {
       }
 
       setUsers(usersData);
+      setSuccessMessage(`✓ Successfully loaded ${usersData.length} user(s)`);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       console.error('Error fetching users:', error);
+      setSuccessMessage('✗ Error: Failed to load users. Please check your connection and try again.');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 5000);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -236,16 +250,48 @@ export default function AdminUsers() {
             </div>
           </div>
 
+          {/* Success/Error Banner - HCI Rule 3 & 4 */}
+          {showSuccess && (
+            <div className={`mb-4 p-3 rounded-lg border-2 flex items-center justify-between animate-fade-in ${
+              successMessage.startsWith('✓') 
+                ? 'bg-green-100 border-green-500' 
+                : 'bg-red-100 border-red-500'
+            }`}>
+              <span className={`font-semibold text-sm ${
+                successMessage.startsWith('✓') ? 'text-green-800' : 'text-red-800'
+              }`}>
+                {successMessage}
+              </span>
+              <button
+                onClick={() => setShowSuccess(false)}
+                className="text-sm px-2 py-1 hover:bg-white/50 rounded transition-colors"
+                title="Dismiss message"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Search */}
           <div className="relative mb-4 sm:mb-6">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 sm:h-5 sm:w-5 text-slate-400" />
             <input
               type="text"
-              placeholder="Search users by email or name..."
+              placeholder="Search users by email or name... (HCI Rule 8: Clear context)"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 sm:pl-10 pr-4 py-2.5 sm:py-3 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+              className="w-full pl-9 sm:pl-10 pr-20 py-2.5 sm:py-3 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent text-sm"
+              title="Type to search across user emails and names"
             />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                title="Clear search (HCI Rule 2: Quick action)"
+              >
+                Clear
+              </button>
+            )}
           </div>
 
           {/* Users Stats */}

@@ -11,16 +11,19 @@ import {
   Legend,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
+import { DeviceStatus, SensorReadings, ControlPanel, DeviceInformation, DataTrends, DeviceStatistics, BoundaryMappingModal, LocationModal } from './components';
+import { useWeatherData, useGPSData } from './hooks/useDeviceData';
 
 // Register Chart.js components
 ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
 import { useParams, useRouter, usePathname } from "next/navigation";
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { db, database } from '@/lib/firebase';
-import { doc, getDoc, collection, getDocs, updateDoc, query, where, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, updateDoc, query, where, onSnapshot, doc as firestoreDoc } from 'firebase/firestore';
 import { ref, get, onValue, set } from 'firebase/database';
 import { getDeviceData, onDeviceValue } from '@/lib/utils/rtdbHelper';
+import { sendDeviceAction, executeDeviceAction } from '@/lib/utils/deviceActions';
 import NotificationBell from "@/components/NotificationBell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,181 +58,70 @@ export default function DeviceDetail() {
   const [fieldInfo, setFieldInfo] = useState<any>(null);
   const [deviceReadings, setDeviceReadings] = useState<any[]>([]);
   const [showLocationModal, setShowLocationModal] = useState(false);
-  const [gpsData, setGpsData] = useState<any>(null);
+  const gpsData = useGPSData(deviceId);
   const [loadingGps, setLoadingGps] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
-  const [weatherData, setWeatherData] = useState<{ temperature: number | null; humidity: number | null; loading: boolean }>({
-    temperature: null,
-    humidity: null,
-    loading: false
-  });
-  const [isEditingPaddyName, setIsEditingPaddyName] = useState(false);
-  const [paddyNameValue, setPaddyNameValue] = useState('');
-  const [isSavingPaddyName, setIsSavingPaddyName] = useState(false);
+  const weatherData = useWeatherData(deviceId);
+  
+  // Control Panel states
+  const [isScanning, setIsScanning] = useState(false);
+  const [lastScanTime, setLastScanTime] = useState<Date | null>(null);
+  const [scanSuccess, setScanSuccess] = useState(false);
+  
+  // Boundary mapping states
+  const [showBoundaryModal, setShowBoundaryModal] = useState(false);
+  const [polygonCoords, setPolygonCoords] = useState<{lat: number; lng: number}[]>([]);
+  const [mapCenter, setMapCenter] = useState({ lat: 14.5995, lng: 120.9842 }); // Default Philippines
+  const [isSavingBoundary, setIsSavingBoundary] = useState(false);
+  const [inputLat, setInputLat] = useState('');
+  const [inputLng, setInputLng] = useState('');
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const [pointAddedNotification, setPointAddedNotification] = useState(false);
+  const [hasSavedBoundary, setHasSavedBoundary] = useState(false);
+  const [relayStates, setRelayStates] = useState<boolean[]>([false, false]);
+  const [isRestartingDevice, setIsRestartingDevice] = useState(false);
+  const [mapMode, setMapMode] = useState<'view' | 'edit'>('view');
 
   // Live NPK data from Firestore logs (populated by Cloud Functions)
   const paddyLiveData = usePaddyLiveData(user?.uid ?? null, fieldInfo?.id ?? null, paddyInfo?.id ?? null);
 
-  // Fetch temperature and humidity data (from device sensors or weather API)
+  // Load existing boundary coordinates from Firestore
   useEffect(() => {
-    const fetchWeatherData = async () => {
-      if (!deviceId) {
-        console.log('[Weather] No deviceId');
-        return;
-      }
-      
-      console.log('[Weather] Fetching temperature/humidity for device:', deviceId);
-      setWeatherData(prev => ({ ...prev, loading: true }));
+    const loadBoundary = async () => {
+      if (!user || !fieldInfo || !paddyInfo) return;
       
       try {
-        // Strategy 1: Check for device sensor data first (most accurate)
-        try {
-          const sensors = await getDeviceData(deviceId, 'sensors');
-          
-          if (sensors) {
-            if (sensors.temperature !== undefined || sensors.humidity !== undefined) {
-              console.log('[Weather] Using device sensor data');
-              setWeatherData({
-                temperature: sensors.temperature ?? null,
-                humidity: sensors.humidity ?? null,
-                loading: false
-              });
-              // Still try to fetch weather API in background for comparison
-              fetchFreshWeather().catch(() => {}); // Ignore errors
-              return;
-            }
-          }
-        } catch (sensorError) {
-          console.log('[Weather] No device sensor data available:', sensorError);
-        }
+        const paddyRef = firestoreDoc(db, `users/${user.uid}/fields/${fieldInfo.id}/paddies/${paddyInfo.id}`);
+        const paddySnap = await getDoc(paddyRef);
         
-        // Strategy 2: Try cached weather data from RTDB (if available and recent)
-        try {
-          const cachedWeather = await getDeviceData(deviceId, 'weather');
-          
-          if (cachedWeather) {
-            const cacheAge = Date.now() - (cachedWeather.timestamp || 0);
-            const maxCacheAge = 10 * 60 * 1000; // 10 minutes
+        if (paddySnap.exists()) {
+          const data = paddySnap.data();
+          if (data.boundary && data.boundary.coordinates) {
+            setPolygonCoords(data.boundary.coordinates);
+            setHasSavedBoundary(true);
             
-            // Use cached data if it's less than 10 minutes old
-            if (cacheAge < maxCacheAge && (cachedWeather.temperature !== null || cachedWeather.humidity !== null)) {
-              console.log('[Weather] Using cached weather data');
-              setWeatherData({
-                temperature: cachedWeather.temperature ?? null,
-                humidity: cachedWeather.humidity ?? null,
-                loading: false
+            // Set map center to first coordinate if available
+            if (data.boundary.coordinates.length > 0) {
+              setMapCenter({
+                lat: data.boundary.coordinates[0].lat,
+                lng: data.boundary.coordinates[0].lng
               });
-              // Still fetch fresh data in background (don't await)
-              fetchFreshWeather().catch(() => {}); // Ignore errors
-              return;
             }
-          }
-        } catch (cacheError) {
-          console.log('[Weather] No cached weather data:', cacheError);
-        }
-        
-        // Strategy 3: Fetch fresh data from weather API
-        await fetchFreshWeather();
-      } catch (error) {
-        console.error('[Weather] Error fetching weather data:', error);
-        setWeatherData({ temperature: null, humidity: null, loading: false });
-      }
-    };
-    
-    const fetchFreshWeather = async () => {
-      try {
-        // Get GPS coordinates from RTDB - try both gps and location paths
-        let lat: number | null = null;
-        let lng: number | null = null;
-        
-        // Try gps path first (preferred format)
-        try {
-          const gps = await getDeviceData(deviceId, 'gps');
-          
-          if (gps) {
-            lat = gps.lat ?? null;
-            lng = gps.lng ?? null;
-            console.log('[Weather] GPS data from gps path:', { lat, lng });
-          }
-        } catch (gpsError) {
-          console.log('[Weather] No GPS data at gps path');
-        }
-        
-        // Fallback to location path if gps path didn't work
-        if (!lat || !lng) {
-          try {
-            const location = await getDeviceData(deviceId, 'location');
-            
-            if (location) {
-              lat = location.latitude ?? location.lat ?? null;
-              lng = location.longitude ?? location.lng ?? null;
-              console.log('[Weather] GPS data from location path:', { lat, lng });
-            }
-          } catch (locationError) {
-            console.log('[Weather] No GPS data at location path');
-          }
-        }
-        
-        if (!lat || !lng) {
-          console.log('[Weather] No GPS coordinates available, cannot fetch weather');
-          setWeatherData({ temperature: null, humidity: null, loading: false });
-          return;
-        }
-        
-        // Fetch weather from Open-Meteo API (free, no API key required)
-        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m&timezone=auto`;
-        console.log('[Weather] Fetching from:', weatherUrl);
-        const response = await fetch(weatherUrl);
-        
-        if (!response.ok) {
-          throw new Error('Weather API request failed');
-        }
-        
-        const data = await response.json();
-        console.log('[Weather] API response:', data);
-        
-        const temperature = data.current?.temperature_2m ?? null;
-        const humidity = data.current?.relative_humidity_2m ?? null;
-        
-        console.log('[Weather] Temperature:', temperature, 'Humidity:', humidity);
-        
-        setWeatherData({
-          temperature,
-          humidity,
-          loading: false
-        });
-        
-        // Store weather data to RTDB for historical record
-        if (temperature !== null || humidity !== null) {
-          try {
-            console.log('[Weather] Storing to RTDB...');
-            const weatherRef = ref(database, `devices/${deviceId}/weather`);
-            await set(weatherRef, {
-              temperature,
-              humidity,
-              timestamp: Date.now(),
-              source: 'open-meteo'
-            });
-            console.log('[Weather] Stored successfully');
-          } catch (writeError) {
-            console.error('[Weather] Error storing to RTDB (non-critical):', writeError);
-            // Don't fail the whole operation if RTDB write fails
+          } else {
+            setHasSavedBoundary(false);
           }
         }
       } catch (error) {
-        console.error('[Weather] Error fetching fresh weather data:', error);
-        setWeatherData({ temperature: null, humidity: null, loading: false });
+        console.error('Error loading boundary:', error);
+        setHasSavedBoundary(false);
       }
     };
     
-    fetchWeatherData();
-    
-    // Refresh weather data every 10 minutes
-    const interval = setInterval(fetchWeatherData, 10 * 60 * 1000);
-    
-    return () => clearInterval(interval);
-  }, [deviceId]);
+    loadBoundary();
+  }, [user, fieldInfo, paddyInfo]);
+
+  // Weather data handled via useWeatherData hook
 
   // Sync live data from Firestore to state
   useEffect(() => {
@@ -446,44 +338,38 @@ export default function DeviceDetail() {
     fetchDeviceInfo();
   }, [user, deviceId]);
 
-  // Fetch GPS location data for device status card
+  // Load existing boundary coordinates from Firestore
   useEffect(() => {
-    const fetchGPSData = async () => {
-      if (!deviceId) return;
+    const loadBoundary = async () => {
+      if (!user || !fieldInfo || !paddyInfo) return;
       
       try {
-        const gps = await getDeviceData(deviceId, 'gps');
+        const paddyRef = doc(db, `users/${user.uid}/fields/${fieldInfo.id}/paddies/${paddyInfo.id}`);
+        const paddySnap = await getDoc(paddyRef);
         
-        if (gps) {
-          setGpsData(gps);
-        } else {
-          // Try location path as fallback
-          const location = await getDeviceData(deviceId, 'location');
-          
-          if (location) {
-            setGpsData({
-              lat: location.latitude ?? location.lat,
-              lng: location.longitude ?? location.lng,
-              ts: location.timestamp,
-            });
+        if (paddySnap.exists()) {
+          const data = paddySnap.data();
+          if (data.boundary && data.boundary.coordinates) {
+            setPolygonCoords(data.boundary.coordinates);
+            
+            // Set map center to first coordinate if available
+            if (data.boundary.coordinates.length > 0) {
+              setMapCenter({
+                lat: data.boundary.coordinates[0].lat,
+                lng: data.boundary.coordinates[0].lng
+              });
+            }
           }
         }
       } catch (error) {
-        console.error('Error fetching GPS data:', error);
+        console.error('Error loading boundary:', error);
       }
     };
     
-    fetchGPSData();
-    
-    // Set up real-time listener for GPS updates
-    const unsubscribe = onDeviceValue(deviceId, 'gps', (gps) => {
-      if (gps) {
-        setGpsData(gps);
-      }
-    });
-    
-    return () => unsubscribe();
-  }, [deviceId]);
+    loadBoundary();
+  }, [user, fieldInfo, paddyInfo]);
+  
+  // GPS data handled via useGPSData hook
   
   // Historical logs are now handled via real-time snapshot listeners above
   
@@ -513,15 +399,10 @@ export default function DeviceDetail() {
   const handleViewLocation = async () => {
     setShowLocationModal(true);
     setLoadingGps(true);
-    setGpsData(null);
     
     try {
-      // Fetch GPS coordinates from Firebase RTDB
-      const gps = await getDeviceData(deviceId, 'gps');
-      
-      if (gps) {
-        setGpsData(gps);
-      }
+      // GPS data is already available via useGPSData hook
+      // Just open the modal to display it
     } catch (error) {
       console.error('Error fetching GPS data:', error);
     } finally {
@@ -529,47 +410,268 @@ export default function DeviceDetail() {
     }
   };
 
-  // Handle paddy name edit
-  const handleStartEditPaddyName = () => {
-    if (!paddyInfo) return;
-    setPaddyNameValue(paddyInfo.paddyName || '');
-    setIsEditingPaddyName(true);
-  };
 
-  const handleCancelEditPaddyName = () => {
-    setIsEditingPaddyName(false);
-    setPaddyNameValue('');
-  };
 
-  const handleSavePaddyName = async () => {
-    if (!user || !paddyInfo || !fieldInfo) return;
+  // Control Panel Functions
+  const handleScanNow = async () => {
+    if (!user || !fieldInfo || !paddyInfo) return;
     
-    const trimmedName = paddyNameValue.trim();
-    if (!trimmedName) {
-      alert('Paddy name cannot be empty');
+    setIsScanning(true);
+    setScanSuccess(false);
+    
+    try {
+      // Send scan command to device via RTDB
+      const { sendDeviceCommand } = await import('@/lib/utils/deviceCommands');
+      // Assuming ESP32C handles NPK scanning
+      await sendDeviceCommand(deviceId, 'ESP32C', 'npk', 'scan', {}, user.uid);
+      
+      setLastScanTime(new Date());
+      setScanSuccess(true);
+      
+      // Auto-hide success message after 3 seconds
+      setTimeout(() => setScanSuccess(false), 3000);
+    } catch (error) {
+      console.error('Error scanning device:', error);
+      alert('Failed to send scan command to device');
+    } finally {
+      setIsScanning(false);
+    }
+  };
+  
+  // Boundary mapping functions
+  const handleOpenBoundaryMap = () => {
+    // Try to get device GPS location for map center
+    if (gpsData && gpsData.lat && gpsData.lng) {
+      setMapCenter({
+        lat: gpsData.lat,
+        lng: gpsData.lng
+      });
+    } else if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setMapCenter({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+        },
+        (error) => {
+          console.log('Geolocation error:', error);
+        }
+      );
+    }
+    
+    setShowBoundaryModal(true);
+  };
+  
+  // Add point at crosshair (map center)
+  const handleAddPointAtCrosshair = () => {
+    handleAddPoint(mapCenter.lat, mapCenter.lng);
+  };
+  
+  // Update map center when iframe map is moved
+  const handleUpdateMapCenter = () => {
+    // The map center is already set, we just add the point at current center
+    handleAddPointAtCrosshair();
+  };
+  
+  const handleAddPoint = (lat: number, lng: number) => {
+    setPolygonCoords(prev => [...prev, { lat, lng }]);
+    
+    // Show notification
+    setPointAddedNotification(true);
+    setTimeout(() => setPointAddedNotification(false), 2000);
+  };
+  
+  const handleAddCoordinateFromInput = () => {
+    const lat = parseFloat(inputLat);
+    const lng = parseFloat(inputLng);
+    
+    if (isNaN(lat) || isNaN(lng)) {
+      alert('Please enter valid latitude and longitude values');
+      return;
+    }
+    
+    if (lat < -90 || lat > 90) {
+      alert('Latitude must be between -90 and 90');
+      return;
+    }
+    
+    if (lng < -180 || lng > 180) {
+      alert('Longitude must be between -180 and 180');
+      return;
+    }
+    
+    handleAddPoint(lat, lng);
+    setInputLat('');
+    setInputLng('');
+  };
+  
+  const handleRemovePoint = (index: number) => {
+    setPolygonCoords(prev => prev.filter((_, i) => i !== index));
+  };
+  
+  const handleRemoveLastPoint = () => {
+    setPolygonCoords(prev => prev.slice(0, -1));
+  };
+  
+  const handleClearPolygon = () => {
+    setPolygonCoords([]);
+  };
+  
+  const calculatePolygonArea = (coords: {lat: number; lng: number}[]) => {
+    if (coords.length < 3) return 0;
+    
+    const R = 6371000; // Earth radius in meters
+    let area = 0;
+    
+    for (let i = 0; i < coords.length; i++) {
+      const j = (i + 1) % coords.length;
+      const lat1 = coords[i].lat * Math.PI / 180;
+      const lat2 = coords[j].lat * Math.PI / 180;
+      const lng1 = coords[i].lng * Math.PI / 180;
+      const lng2 = coords[j].lng * Math.PI / 180;
+      
+      area += (lng2 - lng1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+    }
+    
+    area = Math.abs(area * R * R / 2);
+    return area;
+  };
+  
+  const handleSaveBoundary = async () => {
+    if (!user || !fieldInfo || !paddyInfo) return;
+    
+    if (polygonCoords.length < 3) {
+      alert('Please add at least 3 points to create a boundary area');
       return;
     }
 
-    if (trimmedName === paddyInfo.paddyName) {
-      setIsEditingPaddyName(false);
-      return;
-    }
-
-    setIsSavingPaddyName(true);
+    setIsSavingBoundary(true);
     try {
       const paddyRef = doc(db, `users/${user.uid}/fields/${fieldInfo.id}/paddies/${paddyInfo.id}`);
+      
+      const area = calculatePolygonArea(polygonCoords);
+      
+      // Save boundary with all coordinates to Firestore
       await updateDoc(paddyRef, {
-        paddyName: trimmedName,
+        boundary: {
+          coordinates: polygonCoords.map(coord => ({
+            lat: parseFloat(coord.lat.toFixed(8)), // Store with 8 decimal precision
+            lng: parseFloat(coord.lng.toFixed(8))
+          })),
+          area: area,
+          pointCount: polygonCoords.length,
+          updatedAt: new Date().toISOString()
+        }
       });
 
-      // Update local state
-      setPaddyInfo({ ...paddyInfo, paddyName: trimmedName });
-      setIsEditingPaddyName(false);
+      console.log('✓ Boundary saved successfully:', {
+        points: polygonCoords.length,
+        area: area,
+        areaHectares: (area / 10000).toFixed(2),
+        coordinates: polygonCoords
+      });
+
+      alert(`✓ Paddy boundary saved!\n\n${polygonCoords.length} Points\n${(area / 10000).toFixed(2)} hectares`);
+      setHasSavedBoundary(true); // Mark as saved
+      setShowBoundaryModal(false);
+      // Keep polygonCoords for display, don't clear it
     } catch (error) {
-      console.error('Error updating paddy name:', error);
-      alert('Failed to update paddy name');
+      console.error('Error saving boundary:', error);
+      alert('Failed to save boundary. Please try again.');
     } finally {
-      setIsSavingPaddyName(false);
+      setIsSavingBoundary(false);
+    }
+  };
+  
+  const handleRemoveBoundary = async () => {
+    if (!user || !fieldInfo || !paddyInfo) return;
+    
+    const confirmed = confirm('Are you sure you want to remove the boundary mapping? This cannot be undone.');
+    if (!confirmed) return;
+    
+    setIsSavingBoundary(true);
+    try {
+      const paddyRef = doc(db, `users/${user.uid}/fields/${fieldInfo.id}/paddies/${paddyInfo.id}`);
+      
+      await updateDoc(paddyRef, {
+        boundary: null
+      });
+      
+      setPolygonCoords([]);
+      setHasSavedBoundary(false); // Update state
+      alert('✓ Boundary removed successfully');
+    } catch (error) {
+      console.error('Error removing boundary:', error);
+      alert('Failed to remove boundary. Please try again.');
+    } finally {
+      setIsSavingBoundary(false);
+    }
+  };
+
+  // Relay control handler
+  const handleRelayToggle = async (relayIndex: number) => {
+    if (!user) return;
+    
+    const newState = !relayStates[relayIndex];
+    const relayNum = relayIndex + 1;
+    
+    try {
+      // Import the performDeviceAction function from field page
+      const cmd = `relay:${relayNum}:${newState ? 'on' : 'off'}`;
+      
+      // For now, send via sendDeviceCommand with relay role
+      const { sendDeviceCommand } = await import('@/lib/utils/deviceCommands');
+      await sendDeviceCommand(
+        deviceId,
+        'ESP32A', // Relay controller node
+        'relay',
+        newState ? 'on' : 'off',
+        { relay: relayNum },
+        user.uid
+      );
+      
+      // Update local state
+      const newRelayStates = [...relayStates];
+      newRelayStates[relayIndex] = newState;
+      setRelayStates(newRelayStates);
+      
+      // Show feedback
+      const msg = `✓ Relay ${relayNum} turned ${newState ? 'ON' : 'OFF'}`;
+      alert(msg);
+      console.log(msg);
+    } catch (error) {
+      console.error('Error toggling relay:', error);
+      alert('Failed to toggle relay. Please try again.');
+    }
+  };
+
+  // Device restart handler
+  const handleRestartDevice = async () => {
+    if (!user) return;
+    
+    const confirmed = confirm('This will restart the device. Connection will be temporarily lost. Continue?');
+    if (!confirmed) return;
+    
+    setIsRestartingDevice(true);
+    try {
+      const { sendDeviceCommand } = await import('@/lib/utils/deviceCommands');
+      // Send restart as a relay action (generic command)
+      await sendDeviceCommand(
+        deviceId,
+        'ESP32C',
+        'relay',
+        'restart',
+        {},
+        user.uid
+      );
+      
+      alert('✓ Device restart command sent. Please wait for the device to reconnect.');
+    } catch (error) {
+      console.error('Error restarting device:', error);
+      alert('Failed to send restart command. Please try again.');
+    } finally {
+      setIsRestartingDevice(false);
     }
   };
 
@@ -1144,6 +1246,170 @@ export default function DeviceDetail() {
             </div>
           </div>
 
+          {/* Control Panel */}
+          <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 border-0">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4" style={{ fontFamily: "'Courier New', Courier, monospace" }}>Device Controls</h3>
+            
+            {/* Success Banner */}
+            {scanSuccess && (
+              <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 animate-fade-in">
+                <svg className="w-5 h-5 text-green-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-sm text-green-800 font-medium">✓ Scan command sent successfully!</span>
+              </div>
+            )}
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Scan Device */}
+              <div className="p-4 border border-gray-200 rounded-lg hover:border-green-500 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">📡 Scan NPK</h4>
+                    <p className="text-xs text-gray-600 mt-1">Request immediate sensor reading</p>
+                  </div>
+                  <span className="text-2xl">🔬</span>
+                </div>
+                <button
+                  onClick={handleScanNow}
+                  disabled={isScanning}
+                  className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+                >
+                  {isScanning ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Scanning...
+                    </span>
+                  ) : 'Scan Now'}
+                </button>
+                {lastScanTime && (
+                  <p className="text-xs text-gray-500 mt-2 text-center">
+                    Last scan: {lastScanTime.toLocaleTimeString()}
+                  </p>
+                )}
+              </div>
+              
+              {/* Map Boundary */}
+              <div className="p-4 border border-gray-200 rounded-lg hover:border-blue-500 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">🗺️ Paddy Boundary</h4>
+                    <p className="text-xs text-gray-600 mt-1">
+                      {polygonCoords.length > 0 
+                        ? `${polygonCoords.length} points mapped (${(calculatePolygonArea(polygonCoords) / 10000).toFixed(2)} ha)`
+                        : 'Map the paddy field area'}
+                    </p>
+                  </div>
+                  <span className="text-2xl">📍</span>
+                </div>
+                <button
+                  onClick={handleOpenBoundaryMap}
+                  className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                >
+                  {polygonCoords.length > 0 ? '✏️ Edit Boundary' : '🗺️ Map Area'}
+                </button>
+                {hasSavedBoundary && (
+                  <button
+                    onClick={handleRemoveBoundary}
+                    disabled={isSavingBoundary}
+                    className="w-full mt-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    🗑️ Remove Boundary
+                  </button>
+                )}
+              </div>
+              
+              {/* Get Location */}
+              <div className="p-4 border border-gray-200 rounded-lg hover:border-purple-500 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">📍 GPS Location</h4>
+                    <p className="text-xs text-gray-600 mt-1">View device location</p>
+                  </div>
+                  <span className="text-2xl">🌍</span>
+                </div>
+                <button
+                  onClick={handleViewLocation}
+                  className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
+                >
+                  View Location
+                </button>
+                {gpsData && gpsData.lat && gpsData.lng && (
+                  <p className="text-xs text-gray-600 mt-2 text-center font-mono">
+                    {gpsData.lat.toFixed(4)}, {gpsData.lng.toFixed(4)}
+                  </p>
+                )}
+              </div>
+              
+              {/* Relay 1 */}
+              <div className="p-4 border border-gray-200 rounded-lg hover:border-orange-500 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">⚡ Relay 1</h4>
+                    <p className="text-xs text-gray-600 mt-1">Toggle relay channel 1</p>
+                  </div>
+                  <span className={`text-sm font-bold px-2 py-1 rounded ${relayStates[0] ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    {relayStates[0] ? 'ON' : 'OFF'}
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleRelayToggle(0)}
+                  className={`w-full px-4 py-2 rounded-lg transition-colors font-medium ${
+                    relayStates[0]
+                      ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                      : 'bg-orange-100 hover:bg-orange-200 text-orange-700'
+                  }`}
+                >
+                  {relayStates[0] ? 'Turn OFF' : 'Turn ON'}
+                </button>
+              </div>
+              
+              {/* Relay 2 */}
+              <div className="p-4 border border-gray-200 rounded-lg hover:border-orange-500 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">⚡ Relay 2</h4>
+                    <p className="text-xs text-gray-600 mt-1">Toggle relay channel 2</p>
+                  </div>
+                  <span className={`text-sm font-bold px-2 py-1 rounded ${relayStates[1] ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                    {relayStates[1] ? 'ON' : 'OFF'}
+                  </span>
+                </div>
+                <button
+                  onClick={() => handleRelayToggle(1)}
+                  className={`w-full px-4 py-2 rounded-lg transition-colors font-medium ${
+                    relayStates[1]
+                      ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                      : 'bg-orange-100 hover:bg-orange-200 text-orange-700'
+                  }`}
+                >
+                  {relayStates[1] ? 'Turn OFF' : 'Turn ON'}
+                </button>
+              </div>
+              
+              {/* Device Restart */}
+              <div className="p-4 border border-gray-200 rounded-lg hover:border-red-500 transition-colors">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h4 className="font-semibold text-gray-900">🔄 Device Control</h4>
+                    <p className="text-xs text-gray-600 mt-1">Restart device</p>
+                  </div>
+                  <span className="text-2xl">⚙️</span>
+                </div>
+                <button
+                  onClick={handleRestartDevice}
+                  disabled={isRestartingDevice}
+                  className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+                >
+                  {isRestartingDevice ? 'Restarting...' : 'Restart Device'}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Device Information */}
           <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
             <div className="flex items-center justify-between mb-4">
@@ -1166,52 +1432,9 @@ export default function DeviceDetail() {
               </div>
               {paddyInfo && (
                 <>
-                  <div className="py-2 border-b border-gray-100">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-gray-600">Paddy Name</span>
-                      {!isEditingPaddyName && (
-                        <button
-                          onClick={handleStartEditPaddyName}
-                          className="text-green-600 hover:text-green-700 text-xs font-medium"
-                          title="Edit paddy name"
-                        >
-                          ✏️ Edit
-                        </button>
-                      )}
-                    </div>
-                    {isEditingPaddyName ? (
-                      <div className="space-y-2 mt-2">
-                        <Input
-                          type="text"
-                          value={paddyNameValue}
-                          onChange={(e) => setPaddyNameValue(e.target.value)}
-                          className="w-full"
-                          placeholder="Enter paddy name"
-                          disabled={isSavingPaddyName}
-                          autoFocus
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            onClick={handleSavePaddyName}
-                            disabled={isSavingPaddyName || !paddyNameValue.trim()}
-                            size="sm"
-                            className="bg-green-600 hover:bg-green-700 text-white"
-                          >
-                            {isSavingPaddyName ? 'Saving...' : 'Save'}
-                          </Button>
-                          <Button
-                            onClick={handleCancelEditPaddyName}
-                            disabled={isSavingPaddyName}
-                            size="sm"
-                            variant="outline"
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="font-medium text-gray-900">{paddyInfo.paddyName}</span>
-                    )}
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-600">Paddy Name</span>
+                    <span className="font-medium text-gray-900">{paddyInfo.paddyName}</span>
                   </div>
                   {paddyInfo.description && (
                     <div className="flex justify-between py-2 border-b border-gray-100">
@@ -1264,6 +1487,377 @@ export default function DeviceDetail() {
             </button>
           </div>
         </main>
+
+        {/* Boundary Mapping Modal */}
+        {showBoundaryModal && (
+          <div className="fixed inset-0 bg-white z-50 flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold text-gray-900">Paddy Boundary Map</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  {mapMode === 'view' ? 'Viewing saved boundary' : 'Add boundary points by entering coordinates below'}
+                </p>
+              </div>
+              
+              {/* Mode Toggle */}
+              <div className="flex items-center gap-3 mr-4">
+                <button
+                  onClick={() => setMapMode('view')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    mapMode === 'view'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  👁️ View
+                </button>
+                <button
+                  onClick={() => setMapMode('edit')}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                    mapMode === 'edit'
+                      ? 'bg-green-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  ✏️ Edit
+                </button>
+              </div>
+              
+              <button
+                onClick={() => {
+                  setShowBoundaryModal(false);
+                  setMapMode('view'); // Reset to view mode when closing
+                }}
+                disabled={isSavingBoundary}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            {/* Point Added Notification */}
+            {pointAddedNotification && polygonCoords.length > 0 && (
+              <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-50 animate-fade-in">
+                <div className="bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg">
+                  <div className="flex items-center gap-2 mb-1">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span className="font-bold">Point {polygonCoords.length} added!</span>
+                  </div>
+                  <div className="text-xs opacity-90">
+                    {polygonCoords[polygonCoords.length - 1].lat.toFixed(6)}, {polygonCoords[polygonCoords.length - 1].lng.toFixed(6)}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Map Area */}
+            <div className="flex-1 relative overflow-hidden bg-gray-100">
+              {/* Google Maps Iframe */}
+              <iframe
+                width="100%"
+                height="100%"
+                frameBorder="0"
+                style={{ border: 0, position: 'absolute', inset: 0 }}
+                src={`https://www.google.com/maps?q=${mapCenter.lat},${mapCenter.lng}&output=embed&z=18`}
+                allowFullScreen
+                title="Map View"
+              />
+              
+
+              
+              {/* Boundary Visualization with SVG - shows points and connecting lines */}
+              {polygonCoords.length > 0 && (
+                <div className="absolute inset-0 pointer-events-none z-[5]">
+                  <svg className="absolute inset-0 w-full h-full">
+                    {/* Draw connecting lines between points */}
+                    {polygonCoords.length > 1 && (
+                      <>
+                        {/* Lines connecting each consecutive point */}
+                        {polygonCoords.map((coord, idx) => {
+                          if (idx === polygonCoords.length - 1) return null;
+                          
+                          const nextCoord = polygonCoords[idx + 1];
+                          const latDiff1 = (coord.lat - mapCenter.lat) * 100000;
+                          const lngDiff1 = (coord.lng - mapCenter.lng) * 100000;
+                          const latDiff2 = (nextCoord.lat - mapCenter.lat) * 100000;
+                          const lngDiff2 = (nextCoord.lng - mapCenter.lng) * 100000;
+                          
+                          const x1 = 50 + (lngDiff1 / 10);
+                          const y1 = 50 - (latDiff1 / 10);
+                          const x2 = 50 + (lngDiff2 / 10);
+                          const y2 = 50 - (latDiff2 / 10);
+                          
+                          return (
+                            <line
+                              key={`line-${idx}`}
+                              x1={`${x1}%`}
+                              y1={`${y1}%`}
+                              x2={`${x2}%`}
+                              y2={`${y2}%`}
+                              stroke="#3b82f6"
+                              strokeWidth="3"
+                              opacity="0.8"
+                              strokeLinecap="round"
+                            />
+                          );
+                        })}
+                        
+                        {/* Close the polygon with dashed line if 3+ points */}
+                        {polygonCoords.length >= 3 && (() => {
+                          const lastCoord = polygonCoords[polygonCoords.length - 1];
+                          const firstCoord = polygonCoords[0];
+                          const latDiffLast = (lastCoord.lat - mapCenter.lat) * 100000;
+                          const lngDiffLast = (lastCoord.lng - mapCenter.lng) * 100000;
+                          const latDiffFirst = (firstCoord.lat - mapCenter.lat) * 100000;
+                          const lngDiffFirst = (firstCoord.lng - mapCenter.lng) * 100000;
+                          
+                          const xLast = 50 + (lngDiffLast / 10);
+                          const yLast = 50 - (latDiffLast / 10);
+                          const xFirst = 50 + (lngDiffFirst / 10);
+                          const yFirst = 50 - (latDiffFirst / 10);
+                          
+                          return (
+                            <line
+                              key="line-close"
+                              x1={`${xLast}%`}
+                              y1={`${yLast}%`}
+                              x2={`${xFirst}%`}
+                              y2={`${yFirst}%`}
+                              stroke="#3b82f6"
+                              strokeWidth="3"
+                              strokeDasharray="6,4"
+                              opacity="0.6"
+                              strokeLinecap="round"
+                            />
+                          );
+                        })()}
+                      </>
+                    )}
+                    
+                    {/* Draw numbered point markers */}
+                    {polygonCoords.map((coord, idx) => {
+                      const latDiff = (coord.lat - mapCenter.lat) * 100000;
+                      const lngDiff = (coord.lng - mapCenter.lng) * 100000;
+                      
+                      const x = 50 + (lngDiff / 10);
+                      const y = 50 - (latDiff / 10);
+                      
+                      return (
+                        <g key={`marker-${idx}`}>
+                          {/* Point circle background */}
+                          <circle
+                            cx={`${x}%`}
+                            cy={`${y}%`}
+                            r="12"
+                            fill="#3b82f6"
+                            stroke="white"
+                            strokeWidth="2"
+                            opacity="0.95"
+                          />
+                          {/* Point number */}
+                          <text
+                            x={`${x}%`}
+                            y={`${y}%`}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                            fill="white"
+                            fontSize="12"
+                            fontWeight="bold"
+                            pointerEvents="none"
+                          >
+                            {idx + 1}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                  
+                  {/* Area badge overlay */}
+                  {polygonCoords.length >= 3 && (
+                    <div className="absolute top-4 right-4 bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg font-semibold">
+                      <p className="text-xs opacity-90">Boundary Area</p>
+                      <p className="text-base">{(calculatePolygonArea(polygonCoords) / 10000).toFixed(4)} ha</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Controls Overlay - Only show in Edit mode */}
+              {mapMode === 'edit' && (
+                <div className="absolute top-6 left-6 bg-white rounded-lg shadow-lg p-4 max-w-md z-10">
+                  <h3 className="font-semibold text-gray-900 mb-2">Add Boundary Points</h3>
+                  <p className="text-xs text-gray-600 mb-3">
+                    Enter GPS coordinates below to add boundary points. You need at least 3 points to create an area.
+                  </p>
+                  
+                  {/* Point counter */}
+                  <div className="pb-3 border-b border-gray-200 mb-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-semibold text-gray-900">Points: {polygonCoords.length}</p>
+                      {polygonCoords.length >= 3 && (
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded font-semibold">
+                          Ready to save
+                        </span>
+                      )}
+                    </div>
+                    {polygonCoords.length >= 3 && (
+                      <p className="text-xs text-green-700 font-medium mt-1">
+                        📐 Area: {(calculatePolygonArea(polygonCoords) / 10000).toFixed(4)} hectares
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* Coordinate Input Section */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-sm font-semibold text-gray-900">Add Coordinates</p>
+                      {(inputLat || inputLng) && (
+                        <button
+                          onClick={() => {
+                            setInputLat('');
+                            setInputLng('');
+                          }}
+                          className="text-xs text-red-600 hover:text-red-700 font-medium"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <input
+                        type="number"
+                        placeholder="Latitude"
+                        value={inputLat}
+                        onChange={(e) => setInputLat(e.target.value)}
+                        step="0.000001"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Longitude"
+                        value={inputLng}
+                        onChange={(e) => setInputLng(e.target.value)}
+                        step="0.000001"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAddCoordinateFromInput}
+                      disabled={!inputLat || !inputLng}
+                      className="w-full mt-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    >
+                      ➕ Add Point
+                    </button>
+                  </div>
+                  
+                  {/* Quick Actions */}
+                  {polygonCoords.length > 0 && (
+                    <div className="flex gap-2 pt-2 border-t border-gray-200">
+                      <button
+                        onClick={handleRemoveLastPoint}
+                        className="flex-1 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg text-xs font-medium hover:bg-yellow-200 transition-colors"
+                      >
+                        ↶ Undo
+                      </button>
+                      <button
+                        onClick={handleClearPolygon}
+                        className="flex-1 px-3 py-2 bg-red-100 text-red-700 rounded-lg text-xs font-medium hover:bg-red-200 transition-colors"
+                      >
+                        Clear All
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* View Mode Info */}
+              {mapMode === 'view' && polygonCoords.length > 0 && (
+                <div className="absolute top-6 left-6 bg-white rounded-lg shadow-lg p-4 z-10">
+                  <h3 className="font-semibold text-gray-900 mb-2">Boundary Info</h3>
+                  <div className="space-y-1 text-sm">
+                    <p className="text-gray-700">
+                      <span className="font-medium">Points:</span> {polygonCoords.length}
+                    </p>
+                    <p className="text-gray-700">
+                      <span className="font-medium">Area:</span> {(calculatePolygonArea(polygonCoords) / 10000).toFixed(4)} ha
+                    </p>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-3">
+                    Switch to Edit mode to modify points
+                  </p>
+                </div>
+              )}
+              
+              {/* No boundary message in view mode */}
+              {mapMode === 'view' && polygonCoords.length === 0 && (
+                <div className="absolute top-6 left-6 bg-white rounded-lg shadow-lg p-4 z-10">
+                  <p className="text-sm text-gray-700">No boundary saved yet.</p>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Switch to Edit mode to add points
+                  </p>
+                </div>
+              )}
+            </div>
+            
+            {/* Footer with Coordinates List */}
+            <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 space-y-4">
+              {/* Save Summary */}
+              {polygonCoords.length >= 3 && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                  <p className="text-sm font-semibold text-blue-900 mb-1">Ready to Save</p>
+                  <p className="text-xs text-blue-700">
+                    📍 <strong>{polygonCoords.length}</strong> coordinates | 
+                    📐 <strong>{(calculatePolygonArea(polygonCoords) / 10000).toFixed(4)}</strong> hectares
+                  </p>
+                </div>
+              )}
+              
+              {/* Coordinates List */}
+              {polygonCoords.length > 0 && (
+                <div className="max-h-40 overflow-y-auto">
+                  <p className="font-semibold text-gray-900 mb-2">Boundary Points ({polygonCoords.length}):</p>
+                  <div className="space-y-2">
+                    {polygonCoords.map((coord, i) => (
+                      <div key={i} className="flex items-center justify-between bg-white rounded px-3 py-2 border border-gray-200">
+                        <span className="text-xs text-gray-700 font-mono">
+                          {i + 1}. {coord.lat.toFixed(6)}, {coord.lng.toFixed(6)}
+                        </span>
+                        <button
+                          onClick={() => handleRemovePoint(i)}
+                          className="text-red-600 hover:text-red-700 text-xs font-medium hover:bg-red-50 px-2 py-1 rounded"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowBoundaryModal(false)}
+                  disabled={isSavingBoundary}
+                  className="flex-1 px-4 py-3 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 font-semibold transition-colors disabled:bg-gray-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveBoundary}
+                  disabled={isSavingBoundary || polygonCoords.length < 3}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 font-bold shadow-lg transition-all disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  {isSavingBoundary ? 'Saving...' : 'Save Boundary'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Floating Action Button - Navigate to Add Field */}
         <button 
@@ -1637,186 +2231,6 @@ export default function DeviceDetail() {
         </Dialog>
       </div>
     </ProtectedRoute>
-  );
-}
-
-// Device Statistics Component
-function DeviceStatistics({ 
-  userId, 
-  fieldId, 
-  paddyId, 
-  deviceId,
-  currentNPK 
-}: { 
-  userId: string; 
-  fieldId: string; 
-  paddyId: string;
-  deviceId: string;
-  currentNPK?: { n?: number; p?: number; k?: number; timestamp?: number };
-}) {
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const { getDeviceNPKStatistics } = await import('@/lib/utils/statistics');
-        const statistics = await getDeviceNPKStatistics(userId, fieldId, paddyId, deviceId, 30);
-        setStats(statistics);
-      } catch (error) {
-        console.error('Error fetching statistics:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStats();
-  }, [userId, fieldId, paddyId, deviceId]);
-
-  if (loading) {
-    return (
-      <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">NPK Statistics (30 Days)</h3>
-        <div className="flex justify-center py-8">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!stats) return null;
-
-  return (
-    <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
-      <h3 className="text-lg font-semibold text-gray-900 mb-4">NPK Statistics (30 Days)</h3>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Nitrogen Stats */}
-        <div className="bg-blue-50 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-semibold text-blue-900">Nitrogen (N)</h4>
-            <span className="text-2xl">🧪</span>
-          </div>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span className="text-sm text-blue-700">Current:</span>
-              <span className="font-bold text-blue-900">
-                {stats.nitrogen.current !== null ? Math.round(stats.nitrogen.current) : '--'} mg/kg
-              </span>
-            </div>
-            {stats.nitrogen.average !== null && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-sm text-blue-700">Average:</span>
-                  <span className="font-medium text-blue-800">{Math.round(stats.nitrogen.average)} mg/kg</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-blue-700">Range:</span>
-                  <span className="text-xs text-blue-600">
-                    {Math.round(stats.nitrogen.min!)} - {Math.round(stats.nitrogen.max!)} mg/kg
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-2">
-                  <span className="text-xs text-blue-600">Trend:</span>
-                  <span className={`text-xs px-2 py-1 rounded ${
-                    stats.nitrogen.trend === 'up' ? 'bg-green-200 text-green-800' :
-                    stats.nitrogen.trend === 'down' ? 'bg-red-200 text-red-800' :
-                    'bg-gray-200 text-gray-800'
-                  }`}>
-                    {stats.nitrogen.trend === 'up' ? '↑ Increasing' :
-                     stats.nitrogen.trend === 'down' ? '↓ Decreasing' :
-                     '→ Stable'}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Phosphorus Stats */}
-        <div className="bg-purple-50 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-semibold text-purple-900">Phosphorus (P)</h4>
-            <span className="text-2xl">⚗️</span>
-          </div>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span className="text-sm text-purple-700">Current:</span>
-              <span className="font-bold text-purple-900">
-                {stats.phosphorus.current !== null ? Math.round(stats.phosphorus.current) : '--'} mg/kg
-              </span>
-            </div>
-            {stats.phosphorus.average !== null && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-sm text-purple-700">Average:</span>
-                  <span className="font-medium text-purple-800">{Math.round(stats.phosphorus.average)} mg/kg</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-purple-700">Range:</span>
-                  <span className="text-xs text-purple-600">
-                    {Math.round(stats.phosphorus.min!)} - {Math.round(stats.phosphorus.max!)} mg/kg
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-2">
-                  <span className="text-xs text-purple-600">Trend:</span>
-                  <span className={`text-xs px-2 py-1 rounded ${
-                    stats.phosphorus.trend === 'up' ? 'bg-green-200 text-green-800' :
-                    stats.phosphorus.trend === 'down' ? 'bg-red-200 text-red-800' :
-                    'bg-gray-200 text-gray-800'
-                  }`}>
-                    {stats.phosphorus.trend === 'up' ? '↑ Increasing' :
-                     stats.phosphorus.trend === 'down' ? '↓ Decreasing' :
-                     '→ Stable'}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Potassium Stats */}
-        <div className="bg-orange-50 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-semibold text-orange-900">Potassium (K)</h4>
-            <span className="text-2xl">🔬</span>
-          </div>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span className="text-sm text-orange-700">Current:</span>
-              <span className="font-bold text-orange-900">
-                {stats.potassium.current !== null ? Math.round(stats.potassium.current) : '--'} mg/kg
-              </span>
-            </div>
-            {stats.potassium.average !== null && (
-              <>
-                <div className="flex justify-between">
-                  <span className="text-sm text-orange-700">Average:</span>
-                  <span className="font-medium text-orange-800">{Math.round(stats.potassium.average)} mg/kg</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm text-orange-700">Range:</span>
-                  <span className="text-xs text-orange-600">
-                    {Math.round(stats.potassium.min!)} - {Math.round(stats.potassium.max!)} mg/kg
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-2">
-                  <span className="text-xs text-orange-600">Trend:</span>
-                  <span className={`text-xs px-2 py-1 rounded ${
-                    stats.potassium.trend === 'up' ? 'bg-green-200 text-green-800' :
-                    stats.potassium.trend === 'down' ? 'bg-red-200 text-red-800' :
-                    'bg-gray-200 text-gray-800'
-                  }`}>
-                    {stats.potassium.trend === 'up' ? '↑ Increasing' :
-                     stats.potassium.trend === 'down' ? '↓ Decreasing' :
-                     '→ Stable'}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 

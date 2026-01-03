@@ -80,11 +80,28 @@ export const scheduledSensorLogger = functions.pubsub
             continue; // Skip devices without sensor data
           }
 
+          // Validate data is fresh (not stale from Firestore)
+          const deviceTimestamp = npk.lastUpdate ?? npk.timestamp ?? npk.ts;
+          
+          // CRITICAL: Only log if we have a valid timestamp from device
+          if (!deviceTimestamp) {
+            console.warn(`[Scheduled] Device ${deviceId} has no timestamp, skipping stale data`);
+            continue;
+          }
+          
+          const now = Date.now();
+          const timeSinceLastUpdate = now - (typeof deviceTimestamp === 'number' ? deviceTimestamp : 0);
+          
+          // Skip data older than 1 hour (likely stale from Firestore)
+          if (timeSinceLastUpdate > 60 * 60 * 1000) {
+            console.warn(`[Scheduled] Device ${deviceId} data is ${Math.round(timeSinceLastUpdate / 60000)} minutes old, skipping stale data`);
+            continue;
+          }
+
           // Normalize readings
           const nitrogen = npk.nitrogen ?? npk.n ?? npk.N ?? null;
           const phosphorus = npk.phosphorus ?? npk.p ?? npk.P ?? null;
           const potassium = npk.potassium ?? npk.k ?? npk.K ?? null;
-          const deviceTimestamp = npk.lastUpdate ?? npk.timestamp ?? npk.ts ?? Date.now();
 
           // Skip if no actual readings
           if (nitrogen === null && phosphorus === null && potassium === null) {
@@ -133,6 +150,15 @@ export const scheduledSensorLogger = functions.pubsub
             source: 'firebase-scheduled',
           };
 
+          // Helper to normalize various timestamp shapes to milliseconds
+          const toMillis = (value: any): number => {
+            if (!value) return 0;
+            if (typeof value === 'number') return value;
+            if (value.toDate) return value.toDate().getTime();
+            if (value.getTime) return value.getTime();
+            return 0;
+          };
+
           const writes: Promise<any>[] = [];
           paddiesSnapshot.forEach((paddyDoc) => {
             const logsCol = paddyDoc.ref.collection('logs');
@@ -144,31 +170,49 @@ export const scheduledSensorLogger = functions.pubsub
                 .limit(1)
                 .get()
                 .then(async (lastLogSnapshot) => {
+                  // Strong dedup: if a log already exists with the same deviceTimestamp, skip immediately
+                  const currentDeviceTime = toMillis(deviceTimestamp);
+                  if (currentDeviceTime > 0) {
+                    const existingSameTs = await logsCol
+                      .where('deviceTimestamp', '==', currentDeviceTime)
+                      .limit(1)
+                      .get();
+                    if (!existingSameTs.empty) {
+                      return null; // Already logged this exact device timestamp
+                    }
+                  }
+
                   if (!lastLogSnapshot.empty) {
                     const lastLog = lastLogSnapshot.docs[0].data();
-                    // Handle Firestore Timestamp properly
-                    let lastLogTime = 0;
-                    if (lastLog.timestamp) {
-                      if (lastLog.timestamp.toDate) {
-                        lastLogTime = lastLog.timestamp.toDate().getTime();
-                      } else if (lastLog.timestamp.getTime) {
-                        lastLogTime = lastLog.timestamp.getTime();
-                      } else if (typeof lastLog.timestamp === 'number') {
-                        lastLogTime = lastLog.timestamp;
-                      }
+                    const lastDeviceTime = toMillis(lastLog.deviceTimestamp);
+                    const lastServerTime = toMillis(lastLog.timestamp);
+
+                    // Dedup 1: exact same deviceTimestamp (replays / stale logs)
+                    if (lastDeviceTime > 0 && currentDeviceTime > 0 && currentDeviceTime === lastDeviceTime) {
+                      return null; // Skip exact duplicate
                     }
-                    
-                    const currentTime = deviceTimestamp || Date.now();
-                    
-                    // Skip if same values logged within last 5 minutes
+
+                    // Dedup 2: same readings within 5 minutes based on device timestamp
                     if (
+                      lastDeviceTime > 0 &&
+                      currentDeviceTime > 0 &&
+                      Math.abs(currentDeviceTime - lastDeviceTime) < 5 * 60 * 1000 &&
+                      lastLog.nitrogen === nitrogen &&
+                      lastLog.phosphorus === phosphorus &&
+                      lastLog.potassium === potassium
+                    ) {
+                      return null; // Skip near-duplicate readings
+                    }
+
+                    // Fallback dedup using server timestamp if deviceTimestamp missing
+                    if (
+                      lastServerTime > 0 &&
                       lastLog.nitrogen === nitrogen &&
                       lastLog.phosphorus === phosphorus &&
                       lastLog.potassium === potassium &&
-                      lastLogTime > 0 &&
-                      (currentTime - lastLogTime) < 5 * 60 * 1000
+                      (toMillis(deviceTimestamp) || Date.now()) - lastServerTime < 5 * 60 * 1000
                     ) {
-                      return null; // Skip duplicate
+                      return null; // Skip duplicate by server time
                     }
                   }
                   
@@ -215,7 +259,22 @@ export const realtimeAlertProcessor = functions.firestore
     const log = snap.data();
     const { fieldId, paddyId } = context.params;
 
-    try {
+        try {
+      // Validate the log has a fresh timestamp (not stale data)
+      if (!log.deviceTimestamp) {
+        console.warn('[Alert Processor] Log has no deviceTimestamp, skipping (stale data)');
+        return null;
+      }
+      
+      const now = Date.now();
+      const timeSinceDeviceUpdate = now - (typeof log.deviceTimestamp === 'number' ? log.deviceTimestamp : 0);
+      
+      // Skip alerts if sensor data is older than 1 hour
+      if (timeSinceDeviceUpdate > 60 * 60 * 1000) {
+        console.warn(`[Alert Processor] Device data is ${Math.round(timeSinceDeviceUpdate / 60000)} minutes old, skipping stale alerts`);
+        return null;
+      }
+      
       // Get alert thresholds from settings
       const settingsDoc = await firestore.collection('settings').doc('system').get();
       

@@ -1,6 +1,7 @@
 // This file has been cleared for a fresh start.
 
 import { useState, useEffect, useRef } from 'react';
+import { useAuth } from '@/context/AuthContext';
 import { getDeviceStatus, getDeviceGPS, getDeviceNPK } from '@/lib/utils/deviceStatus';
 import { database, db } from '@/lib/firebase';
 import { ref as dbRef, onValue, off, push, set } from 'firebase/database';
@@ -8,6 +9,7 @@ import { onDeviceValue } from '@/lib/utils/rtdbHelper';
 import { collection, addDoc, Timestamp } from 'firebase/firestore';
 import { sendDeviceAction, executeDeviceAction } from '@/lib/utils/deviceActions';
 import { waitForDeviceActionComplete } from '@/lib/utils/deviceActions';
+import { sendDeviceCommand } from '@/lib/utils/deviceCommands';
 
 const TABS = [
   { label: 'Overview' },
@@ -96,10 +98,12 @@ interface ControlPanelTabProps {
 }
 
 export default function ControlPanelTab({ paddies = [], fieldId, deviceReadings = [] }: ControlPanelTabProps) {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState(0);
   const [deviceData, setDeviceData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [controlMode, setControlMode] = useState<'field' | 'individual'>('field'); // 'field' for all, 'individual' for per-device
+  const [sendingRelay, setSendingRelay] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchAll() {
@@ -130,6 +134,24 @@ export default function ControlPanelTab({ paddies = [], fieldId, deviceReadings 
     }
     if (activeTab === 0) fetchAll();
   }, [activeTab, paddies]);
+
+  // Simple relay sender for ESP32A
+  const sendRelayCommand = async (deviceId: string, relay: 1 | 2, action: 'on' | 'off' | 'toggle') => {
+    if (!user) {
+      alert('You must be signed in to control relays');
+      return;
+    }
+    const key = `${deviceId}-r${relay}-${action}`;
+    setSendingRelay(key);
+    try {
+      await sendDeviceCommand(deviceId, 'ESP32A', 'relay', action, { relay }, user.uid);
+    } catch (e) {
+      console.error('Failed to send relay command', e);
+      alert('Failed to send relay command');
+    } finally {
+      setSendingRelay(null);
+    }
+  };
 
   
 
@@ -199,6 +221,37 @@ export default function ControlPanelTab({ paddies = [], fieldId, deviceReadings 
                           )}
                         </div>
                       </div>
+                    </div>
+
+                    {/* Relay Controls */}
+                    <div className="mt-4 p-4 rounded-xl border-2 border-emerald-200 bg-emerald-50">
+                      <div className="font-semibold mb-3 text-black">Relay Control</div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {[1, 2].map((relay) => (
+                          <div key={`relay-${dev.id}-${relay}`} className="flex flex-col gap-2">
+                            <div className="text-xs font-semibold text-gray-700">Relay {relay}</div>
+                            <div className="flex gap-2">
+                              <button
+                                className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition disabled:opacity-60"
+                                disabled={!!sendingRelay}
+                                onClick={() => sendRelayCommand(dev.id, relay as 1 | 2, 'on')}
+                              >
+                                On
+                              </button>
+                              <button
+                                className="flex-1 px-3 py-2 rounded-lg bg-gray-200 text-gray-800 text-sm font-semibold hover:bg-gray-300 transition disabled:opacity-60"
+                                disabled={!!sendingRelay}
+                                onClick={() => sendRelayCommand(dev.id, relay as 1 | 2, 'off')}
+                              >
+                                Off
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {sendingRelay && (
+                        <div className="text-xs text-gray-600 mt-2">Sending command...</div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -327,6 +380,8 @@ function FieldLevelRelayControls({ devices, fieldName }: { devices: any[]; field
   const [loadingRelays, setLoadingRelays] = useState<Set<number>>(new Set());
   const [deviceLoadingStates, setDeviceLoadingStates] = useState<Record<string, boolean>>({});
   const [messages, setMessages] = useState<Record<number, string>>({});
+  const [lastAction, setLastAction] = useState<{relayIndex: number; previousState: boolean} | null>(null);
+  const [showConfirmation, setShowConfirmation] = useState(false);
 
   const toggleRelayForSelected = async (relayIndex: number) => {
     if (loadingRelays.has(relayIndex) || !selectedRelays.has(relayIndex) || selectedDevices.size === 0) return;
@@ -334,6 +389,9 @@ function FieldLevelRelayControls({ devices, fieldName }: { devices: any[]; field
     const prev = [...relayStates];
     const next = [...relayStates];
     next[relayIndex] = !next[relayIndex];
+    
+    // Store for undo functionality (Rule 6: Easy reversal)
+    setLastAction({ relayIndex, previousState: prev[relayIndex] });
     
     setRelayStates(next);
     setLoadingRelays(prev => new Set([...prev, relayIndex]));
@@ -366,28 +424,32 @@ function FieldLevelRelayControls({ devices, fieldName }: { devices: any[]; field
         })
       );
 
-      // Check if all acknowledged
+      // Process results for feedback (HCI Rules 3, 5)
       const allAcknowledged = results.every(r => r.acknowledged);
       const allCompleted = results.every(r => r.completed);
-      const failedCount = results.filter(r => !r.acknowledged).length;
+      const failedCount = results.filter(r => !r.completed).length;
 
+      // Rule 3: Informative feedback & Rule 4: Dialog closure
       if (allAcknowledged) {
         if (allCompleted) {
-          setMessages({ ...messages, [relayIndex]: next[relayIndex] ? '✓ Relay ON' : '✓ Relay OFF' });
+          setMessages({ ...messages, [relayIndex]: `✓ Success: Relay ${relayIndex + 1} ${next[relayIndex] ? 'ON' : 'OFF'} for ${selectedDevices.size} device(s)` });
+          setShowConfirmation(true);
+          setTimeout(() => setShowConfirmation(false), 3000);
         } else {
-          setMessages({ ...messages, [relayIndex]: '⚠ Sent (some incomplete)' });
+          setMessages({ ...messages, [relayIndex]: `⚠ Partially completed: ${failedCount} device(s) incomplete` });
         }
       } else {
-        setMessages({ ...messages, [relayIndex]: `✗ Failed on ${failedCount}` });
+        // Rule 5: Simple error handling
+        setMessages({ ...messages, [relayIndex]: `✗ Error: Failed on ${failedCount} device(s). Please retry.` });
         setRelayStates(prev); // revert
       }
 
-      setTimeout(() => setMessages(m => { delete m[relayIndex]; return { ...m }; }), 4000);
+      setTimeout(() => setMessages(m => { delete m[relayIndex]; return { ...m }; }), 5000);
     } catch (e) {
       console.error(e);
       setRelayStates(prev); // revert
-      setMessages({ ...messages, [relayIndex]: '✗ Operation failed' });
-      setTimeout(() => setMessages(m => { delete m[relayIndex]; return { ...m }; }), 3000);
+      setMessages({ ...messages, [relayIndex]: `✗ Network error. Please check connection and retry.` });
+      setTimeout(() => setMessages(m => { delete m[relayIndex]; return { ...m }; }), 5000);
     } finally {
       setLoadingRelays(prev => {
         const next = new Set(prev);
@@ -398,11 +460,80 @@ function FieldLevelRelayControls({ devices, fieldName }: { devices: any[]; field
     }
   };
 
+  // Rule 6: Easy reversal - Undo last action
+  const undoLastAction = async () => {
+    if (!lastAction) return;
+    
+    const { relayIndex, previousState } = lastAction;
+    const newStates = [...relayStates];
+    newStates[relayIndex] = previousState;
+    setRelayStates(newStates);
+    
+    // Send command to revert
+    setLoadingRelays(prev => new Set([...prev, relayIndex]));
+    const cmd = `relay:${relayIndex + 1}:${previousState ? 'on' : 'off'}`;
+    
+    try {
+      await Promise.all(
+        Array.from(selectedDevices).map(deviceId => 
+          performDeviceAction(deviceId, cmd, async () => getDeviceStatus(deviceId))
+        )
+      );
+      setMessages({ ...messages, [relayIndex]: '↶ Action reversed successfully' });
+      setLastAction(null);
+    } catch (e) {
+      setMessages({ ...messages, [relayIndex]: '✗ Undo failed' });
+    } finally {
+      setLoadingRelays(prev => {
+        const next = new Set(prev);
+        next.delete(relayIndex);
+        return next;
+      });
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {/* Rule 3 & 4: Success confirmation banner */}
+      {showConfirmation && (
+        <div className="p-4 rounded-lg bg-green-100 border-2 border-green-500 flex items-center justify-between animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">✓</span>
+            <span className="font-semibold text-green-800">Operation completed successfully!</span>
+          </div>
+          {lastAction && (
+            <button
+              onClick={undoLastAction}
+              className="px-3 py-1 text-sm font-semibold bg-white hover:bg-gray-100 text-green-800 rounded border border-green-500 transition-colors"
+              title="Undo last action (Rule 6: Easy reversal)"
+            >
+              ↶ Undo
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Device Selection */}
       <div className="p-4 rounded-lg border-2 border-green-300 bg-green-50">
-        <div className="font-bold text-black mb-3">Select Paddies to Control</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-bold text-black">Select Paddies to Control</div>
+          <div className="flex gap-2">
+            {/* Rule 2: Shortcuts for frequent users */}
+            <button
+              onClick={() => setSelectedDevices(new Set(devices.map(d => d.id)))}
+              className="px-3 py-1 text-xs font-semibold bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+              title="Keyboard shortcut: Ctrl+A (future implementation)"
+            >
+              Select All
+            </button>
+            <button
+              onClick={() => setSelectedDevices(new Set())}
+              className="px-3 py-1 text-xs font-semibold bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {devices.map((dev) => (
             <label
@@ -440,7 +571,23 @@ function FieldLevelRelayControls({ devices, fieldName }: { devices: any[]; field
 
       {/* Relay Selection */}
       <div className="p-4 rounded-lg border-2 border-blue-300 bg-blue-50">
-        <div className="font-bold text-black mb-3">Select Relays to Control</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-bold text-black">Select Relays to Control</div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedRelays(new Set([0, 1, 2, 3]))}
+              className="px-3 py-1 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+            >
+              Select All
+            </button>
+            <button
+              onClick={() => setSelectedRelays(new Set())}
+              className="px-3 py-1 text-xs font-semibold bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-4 gap-2">
           {[0, 1, 2, 3].map((i) => (
             <label key={i} className="flex items-center gap-2 cursor-pointer p-2 rounded hover:bg-blue-100 transition-colors">
@@ -464,6 +611,16 @@ function FieldLevelRelayControls({ devices, fieldName }: { devices: any[]; field
       {/* Relay Controls Grid */}
       <div className="p-4 rounded-lg border-2 border-gray-300 bg-white">
         <div className="font-bold text-black mb-3">Control Relays</div>
+        {selectedDevices.size === 0 && (
+          <div className="p-4 mb-3 rounded bg-yellow-50 border border-yellow-200">
+            <p className="text-sm text-yellow-800 font-medium">⚠️ Please select at least one paddy to control</p>
+          </div>
+        )}
+        {selectedRelays.size === 0 && selectedDevices.size > 0 && (
+          <div className="p-4 mb-3 rounded bg-yellow-50 border border-yellow-200">
+            <p className="text-sm text-yellow-800 font-medium">⚠️ Please select at least one relay to control</p>
+          </div>
+        )}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[0, 1, 2, 3].map((i) => (
             <div
@@ -599,7 +756,23 @@ function RelayControlsPerDevice({ deviceId, paddyName }: { deviceId: string; pad
     <div className="space-y-3">
       {/* Device Selection Checkboxes */}
       <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
-        <div className="text-sm font-medium text-black mb-2">Select relays to control:</div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm font-medium text-black">Select relays to control:</div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedRelays(new Set([0, 1, 2, 3]))}
+              className="px-2 py-1 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+            >
+              All
+            </button>
+            <button
+              onClick={() => setSelectedRelays(new Set())}
+              className="px-2 py-1 text-xs font-semibold bg-gray-600 hover:bg-gray-700 text-white rounded transition-colors"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
         <div className="grid grid-cols-4 gap-2">
           {[0, 1, 2, 3].map((i) => (
             <label key={i} className="flex items-center gap-2 cursor-pointer p-2 rounded hover:bg-white transition-colors">

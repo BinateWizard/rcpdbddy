@@ -573,7 +573,7 @@ export default function FieldDetail() {
                 activeTab === 'overview' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
               <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'overview' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'overview' ? 2 : 1.5} d="M3 10.5L12 4l9 6.5V20a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1V10.5z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'overview' ? 2 : 1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               {/* Label - only show when active */}
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
@@ -604,43 +604,46 @@ export default function FieldDetail() {
               }`}>Paddies</span>
             </button>
 
-            {/* Statistics Tab */}
-            {hasDevices && (
-              <button
-                onClick={() => setActiveTab('statistics')}
-                className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
-                  activeTab === 'statistics'
-                    ? 'text-emerald-600'
-                    : 'text-gray-400 hover:text-emerald-600'
-                }`}
-              >
-                <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
-                  activeTab === 'statistics' ? 'bg-emerald-600' : 'bg-transparent'
-                }`} />
-                <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'statistics' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'statistics' ? 2 : 1.5} d="M7 16V10M12 16V7M17 16V13" />
-                </svg>
-                <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
-                  activeTab === 'statistics' ? 'opacity-100' : 'opacity-0 h-0'
-                }`}>Stats</span>
-              </button>
-            )}
+            {/* Statistics Tab (always visible; disabled if no devices) */}
+            <button
+              onClick={() => {
+                if (!hasDevices) return;
+                setActiveTab('statistics');
+              }}
+              disabled={!hasDevices}
+              className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-white ${
+                activeTab === 'statistics'
+                  ? 'text-emerald-600'
+                  : hasDevices
+                    ? 'text-gray-400 hover:text-emerald-600'
+                    : 'text-gray-300 cursor-not-allowed'
+              }`}
+            >
+              <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
+                activeTab === 'statistics' ? 'bg-emerald-600' : 'bg-transparent'
+              }`} />
+              <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'statistics' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'statistics' ? 2 : 1.5} d="M7 16V10M12 16V7M17 16V13" />
+              </svg>
+              <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
+                activeTab === 'statistics' ? 'opacity-100' : 'opacity-0 h-0'
+              }`}>Stats</span>
+            </button>
 
             {/* Information Tab */}
             <button
               onClick={() => setActiveTab('information')}
               className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 ${
                 activeTab === 'information'
-                  ? 'text-green-600'
-                  : 'text-gray-400 hover:text-gray-600'
+                  ? 'text-emerald-600'
+                  : 'text-gray-400 hover:text-emerald-600'
               }`}
             >
               <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
                 activeTab === 'information' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
               <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'information' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="9" strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'information' ? 2 : 1.5} />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'information' ? 2 : 1.5} d="M12 8h.01M12 11v5" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'information' ? 2 : 1.5} d="M13 16H9v-4h4v4zm-8-8h4V4H5v4zm8-4v4h4V4h-4z" />
               </svg>
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
                 activeTab === 'information' ? 'opacity-100' : 'opacity-0 h-0'
@@ -652,15 +655,15 @@ export default function FieldDetail() {
               onClick={() => setActiveTab('control-panel')}
               className={`relative flex flex-col items-center justify-center w-16 h-14 rounded-xl transition-all duration-300 ${
                 activeTab === 'control-panel'
-                  ? 'text-green-600'
-                  : 'text-gray-400 hover:text-gray-600'
+                  ? 'text-emerald-600 bg-emerald-100'
+                  : 'text-gray-400 hover:text-emerald-600 hover:bg-gray-100'
               }`}
             >
               <div className={`absolute -top-1 left-1/2 -translate-x-1/2 w-8 h-1 rounded-full transition-all duration-300 ${
                 activeTab === 'control-panel' ? 'bg-emerald-600' : 'bg-transparent'
               }`} />
               <svg className={`w-6 h-6 transition-transform duration-300 ${activeTab === 'control-panel' ? 'scale-110' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'control-panel' ? 2 : 1.5} d="M12 8a4 4 0 100 8 4 4 0 000-8zm8 4c0 .7-.1 1.4-.3 2l1.8 1.4-2 3.5-2.1-.8a8.1 8.1 0 01-1.6.9L14.7 21h-5.4l-.9-2.8c-.6-.2-1.1-.5-1.6-.9l-2.1.8-2-3.5L4.3 14c-.2-.6-.3-1.3-.3-2s.1-1.4.3-2L2.5 8.6l2-3.5 2.1.8c.5-.4 1-.7 1.6-.9L9.3 3h5.4l.9 2.8c.6.2 1.1.5 1.6.9l2.1-.8 2 3.5-1.8 1.4c.2.6.3 1.3.3 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={activeTab === 'control-panel' ? 2 : 1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5a4 4 0 100-8 4 4 0 000 8z" />
               </svg>
               <span className={`text-[10px] font-semibold mt-0.5 transition-all duration-300 ${
                 activeTab === 'control-panel' ? 'opacity-100' : 'opacity-0 h-0'

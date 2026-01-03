@@ -7,10 +7,14 @@ import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 export default function CreateTestDevices() {
   const [status, setStatus] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [createdDevices, setCreatedDevices] = useState<string[]>([]);
+  const [showSuccess, setShowSuccess] = useState(false);
 
   const createDevices = async () => {
     setLoading(true);
     setStatus('Creating test devices...');
+    setShowSuccess(false);
+    const devices: string[] = [];
 
     try {
       // Create DEVICE_0001
@@ -21,6 +25,7 @@ export default function CreateTestDevices() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      devices.push('DEVICE_0001');
       setStatus(prev => prev + '\n✅ Created DEVICE_0001');
 
       // Create DEVICE_0002
@@ -31,6 +36,7 @@ export default function CreateTestDevices() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      devices.push('DEVICE_0002');
       setStatus(prev => prev + '\n✅ Created DEVICE_0002');
 
       // Create DEVICE_0003
@@ -41,11 +47,14 @@ export default function CreateTestDevices() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+      devices.push('DEVICE_0003');
       setStatus(prev => prev + '\n✅ Created DEVICE_0003');
 
+      setCreatedDevices(devices);
       setStatus(prev => prev + '\n\n✨ All test devices created successfully!\n\nYou can now use these device IDs:\n  - DEVICE_0001\n  - DEVICE_0002\n  - DEVICE_0003');
+      setShowSuccess(true);
     } catch (error: any) {
-      setStatus(prev => prev + `\n\n❌ Error: ${error.message}`);
+      setStatus(prev => prev + `\n\n❌ Error: ${error.message}. Please try again or check console for details.`);
     } finally {
       setLoading(false);
     }
@@ -62,10 +71,32 @@ export default function CreateTestDevices() {
         <button
           onClick={createDevices}
           disabled={loading}
-          className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+          className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          title="Create 3 test devices in Firestore (HCI Rule 8: Clear action)"
         >
-          {loading ? 'Creating...' : 'Create Test Devices'}
+          {loading ? (
+            <>
+              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span>Creating devices...</span>
+            </>
+          ) : (
+            'Create Test Devices'
+          )}
         </button>
+
+        {showSuccess && (
+          <div className="mt-4 p-4 bg-green-100 border-2 border-green-500 rounded-lg flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">✓</span>
+              <span className="font-semibold text-green-800">
+                Successfully created {createdDevices.length} test device(s)!
+              </span>
+            </div>
+          </div>
+        )}
 
         {status && (
           <div className="mt-6 p-4 bg-gray-50 rounded-lg">

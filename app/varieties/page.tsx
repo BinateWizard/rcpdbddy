@@ -62,6 +62,8 @@ export default function RiceVarietiesPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedVariety, setSelectedVariety] = useState<RiceVariety | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [loadMessage, setLoadMessage] = useState('');
 
   useEffect(() => {
     fetchVarieties();
@@ -76,8 +78,14 @@ export default function RiceVarietiesPage() {
       const text = await response.text();
       const data: RiceVarietiesData = JSON.parse(text);
       setVarieties(data.varieties || []);
+      setLoadMessage(`✓ Successfully loaded ${data.varieties?.length || 0} rice varieties`);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       console.error('Error fetching rice varieties:', error);
+      setLoadMessage('✗ Error: Failed to load rice varieties. Please refresh the page.');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 5000);
     } finally {
       setLoading(false);
     }
@@ -94,6 +102,11 @@ export default function RiceVarietiesPage() {
 
   return (
     <ProtectedRoute>
+      {/* Skip to Main Content - Accessibility (UI Rule 7) */}
+      <a href="#main-content" className="ui-skip-link">
+        Skip to main content
+      </a>
+      
       <div className="min-h-screen bg-gradient-to-br from-green-50 via-white to-emerald-50">
         {/* Navigation Bar */}
         <nav className="bg-gradient-to-r from-green-500 via-emerald-500 to-teal-500 sticky top-0 z-50 shadow-lg">
@@ -131,13 +144,35 @@ export default function RiceVarietiesPage() {
         </nav>
 
         {/* Main Content */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 ui-container">
           <Banner
             variant="gradient"
             title="Rice Varieties"
             description="Explore different rice varieties and their characteristics for your farming needs"
             icon={<BookOpen className="h-6 w-6" />}
           />
+
+          {/* Success/Error Banner - HCI Rule 3 & 4 */}
+          {showSuccess && (
+            <div className={`mt-6 p-4 rounded-xl border-2 flex items-center justify-between shadow-md animate-fade-in ${
+              loadMessage.startsWith('✓') 
+                ? 'bg-green-100 border-green-500' 
+                : 'bg-red-100 border-red-500'
+            }`}>
+              <span className={`font-semibold text-sm ${
+                loadMessage.startsWith('✓') ? 'text-green-800' : 'text-red-800'
+              }`}>
+                {loadMessage}
+              </span>
+              <button
+                onClick={() => setShowSuccess(false)}
+                className="text-sm px-2 py-1 hover:bg-white/50 rounded transition-colors"
+                title="Dismiss message"
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
           {/* Varieties Grid */}
           {loading ? (
@@ -213,7 +248,7 @@ export default function RiceVarietiesPage() {
               ))}
             </div>
           )}
-        </div>
+        </main>
 
         {/* Variety Detail Modal */}
         {selectedVariety && (
@@ -386,11 +421,21 @@ export default function RiceVarietiesPage() {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
                 <Input
                   type="text"
-                  placeholder="Search rice varieties..."
+                  placeholder="Search rice varieties by name, alias, or breeder... (HCI Rule 8)"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10 pr-4 py-3 rounded-xl border-0 shadow-md focus:ring-2 focus:ring-green-200 bg-white"
+                  className="pl-10 pr-20 py-3 rounded-xl border-0 shadow-md focus:ring-2 focus:ring-green-200 bg-white"
+                  title="Type to search across all variety properties"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors font-medium"
+                    title="Clear search (HCI Rule 2: Quick action)"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
               <div className="mt-6 space-y-3 max-h-[60vh] overflow-y-auto">
                 {filteredVarieties.length === 0 ? (

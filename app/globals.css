@@ -317,3 +317,549 @@ textarea,
 .animate-slide-in-left {
   animation: slide-in-left 0.3s ease-out;
 }
+/* ============================================
+   UI DESIGN SYSTEM - 8 CORE PRINCIPLES
+   ============================================ */
+
+/* ========================================
+   UI RULE 1: CLEAR VISUAL HIERARCHY
+   Size, weight, color, spacing indicate priority
+   ======================================== */
+
+/* Heading Scale - Size indicates importance */
+.ui-heading-primary {
+  font-size: clamp(1.75rem, 4vw, 3rem);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.ui-heading-secondary {
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+
+.ui-heading-tertiary {
+  font-size: clamp(1.25rem, 2.5vw, 1.875rem);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--foreground);
+}
+
+.ui-heading-quaternary {
+  font-size: clamp(1.125rem, 2vw, 1.5rem);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--foreground);
+}
+
+/* Body Text Scale */
+.ui-text-lead {
+  font-size: clamp(1.125rem, 2vw, 1.25rem);
+  line-height: 1.7;
+  font-weight: 400;
+  color: rgba(0, 0, 0, 0.8);
+}
+
+.ui-text-body {
+  font-size: 1rem;
+  line-height: 1.6;
+  font-weight: 400;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.ui-text-small {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  font-weight: 400;
+  color: rgba(0, 0, 0, 0.7);
+}
+
+.ui-text-caption {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  font-weight: 400;
+  color: rgba(0, 0, 0, 0.6);
+  letter-spacing: 0.01em;
+}
+
+/* Button Hierarchy - Primary actions dominate visually */
+.ui-btn-primary {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.75rem;
+  font-size: 1rem;
+  box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.3), 0 2px 4px -1px rgba(16, 185, 129, 0.2);
+  transition: all 0.2s ease;
+}
+
+.ui-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.4), 0 4px 6px -2px rgba(16, 185, 129, 0.3);
+}
+
+.ui-btn-secondary {
+  background: white;
+  color: #374151;
+  font-weight: 500;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.625rem;
+  font-size: 0.9375rem;
+  border: 2px solid #e5e7eb;
+  transition: all 0.2s ease;
+}
+
+.ui-btn-secondary:hover {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.ui-btn-tertiary {
+  background: transparent;
+  color: #6b7280;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+}
+
+.ui-btn-tertiary:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+/* ========================================
+   UI RULE 2: CONSISTENCY & PREDICTABILITY
+   Same action = same visual treatment
+   ======================================== */
+
+/* Consistent Spacing Scale */
+:root {
+  --space-xs: 0.25rem;    /* 4px */
+  --space-sm: 0.5rem;     /* 8px */
+  --space-md: 1rem;       /* 16px */
+  --space-lg: 1.5rem;     /* 24px */
+  --space-xl: 2rem;       /* 32px */
+  --space-2xl: 3rem;      /* 48px */
+  --space-3xl: 4rem;      /* 64px */
+}
+
+/* Consistent Border Radius */
+:root {
+  --radius-sm: 0.375rem;  /* 6px */
+  --radius-md: 0.5rem;    /* 8px */
+  --radius-lg: 0.75rem;   /* 12px */
+  --radius-xl: 1rem;      /* 16px */
+  --radius-2xl: 1.5rem;   /* 24px */
+  --radius-full: 9999px;
+}
+
+/* Consistent Shadows */
+:root {
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* Consistent Color Palette */
+:root {
+  /* Brand Colors */
+  --color-primary: #10b981;
+  --color-primary-dark: #059669;
+  --color-primary-light: #34d399;
+  
+  /* Semantic Colors */
+  --color-success: #10b981;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+  --color-info: #3b82f6;
+  
+  /* Neutral Colors */
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+}
+
+/* ========================================
+   UI RULE 3: SIMPLICITY & VISUAL ECONOMY
+   Remove unnecessary elements
+   ======================================== */
+
+/* Clean Card Component */
+.ui-card-clean {
+  background: white;
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-gray-100);
+  transition: all 0.2s ease;
+}
+
+.ui-card-clean:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-gray-200);
+}
+
+/* Minimal Input Style */
+.ui-input-minimal {
+  border: none;
+  border-bottom: 2px solid var(--color-gray-200);
+  padding: 0.5rem 0;
+  background: transparent;
+  font-size: 1rem;
+  transition: border-color 0.2s ease;
+}
+
+.ui-input-minimal:focus {
+  outline: none;
+  border-bottom-color: var(--color-primary);
+}
+
+/* ========================================
+   UI RULE 4: AFFORDANCE & SIGNIFIERS
+   Users must understand what is interactive
+   ======================================== */
+
+/* Interactive Elements - Cursor Changes */
+button,
+a,
+[role="button"],
+.clickable,
+.ui-interactive {
+  cursor: pointer;
+  user-select: none;
+}
+
+button:disabled,
+a[disabled],
+.ui-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Link Affordance */
+a:not(.ui-btn-primary):not(.ui-btn-secondary):not(.ui-btn-tertiary) {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.2em;
+  transition: all 0.2s ease;
+}
+
+a:not(.ui-btn-primary):not(.ui-btn-secondary):not(.ui-btn-tertiary):hover {
+  text-decoration-color: var(--color-primary);
+  color: var(--color-primary-dark);
+}
+
+/* Button Affordance - Looks Clickable */
+.ui-clickable-affordance {
+  position: relative;
+  transform-origin: center;
+  transition: transform 0.1s ease;
+}
+
+.ui-clickable-affordance:active {
+  transform: scale(0.97);
+}
+
+/* Input Field Affordance */
+input:not([type="checkbox"]):not([type="radio"]),
+textarea,
+select {
+  border: 2px solid var(--color-gray-200);
+  background: white;
+  transition: all 0.2s ease;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
+textarea:focus,
+select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+/* ========================================
+   UI RULE 5: FEEDBACK & SYSTEM STATUS
+   Every action produces visible feedback
+   ======================================== */
+
+/* Hover States */
+.ui-hover-lift:hover {
+  transform: translateY(-2px);
+  transition: transform 0.2s ease;
+}
+
+.ui-hover-glow:hover {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+  transition: box-shadow 0.2s ease;
+}
+
+/* Active/Pressed States */
+.ui-active-press:active {
+  transform: scale(0.95);
+}
+
+/* Loading State */
+.ui-loading {
+  position: relative;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.ui-loading::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid var(--color-gray-300);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Success State */
+.ui-state-success {
+  background: rgba(16, 185, 129, 0.1);
+  border: 2px solid var(--color-success);
+  color: #065f46;
+}
+
+/* Error State */
+.ui-state-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 2px solid var(--color-error);
+  color: #991b1b;
+}
+
+/* Warning State */
+.ui-state-warning {
+  background: rgba(245, 158, 11, 0.1);
+  border: 2px solid var(--color-warning);
+  color: #92400e;
+}
+
+/* Disabled State */
+.ui-state-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: grayscale(50%);
+}
+
+/* ========================================
+   UI RULE 6: ALIGNMENT & SPACING
+   Well-structured layouts reduce cognitive load
+   ======================================== */
+
+/* Grid System */
+.ui-grid-container {
+  display: grid;
+  gap: var(--space-lg);
+}
+
+.ui-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.ui-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.ui-grid-4 { grid-template-columns: repeat(4, 1fr); }
+
+@media (max-width: 768px) {
+  .ui-grid-2, .ui-grid-3, .ui-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Consistent Spacing Utilities */
+.ui-stack-xs > * + * { margin-top: var(--space-xs); }
+.ui-stack-sm > * + * { margin-top: var(--space-sm); }
+.ui-stack-md > * + * { margin-top: var(--space-md); }
+.ui-stack-lg > * + * { margin-top: var(--space-lg); }
+.ui-stack-xl > * + * { margin-top: var(--space-xl); }
+
+/* Section Spacing */
+.ui-section {
+  padding: var(--space-2xl) var(--space-lg);
+}
+
+/* Container Max-Widths */
+.ui-container {
+  max-width: 1280px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--space-lg);
+  padding-right: var(--space-lg);
+}
+
+.ui-container-narrow {
+  max-width: 768px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: var(--space-lg);
+  padding-right: var(--space-lg);
+}
+
+/* ========================================
+   UI RULE 7: READABILITY & ACCESSIBILITY
+   Content must be easy to read and perceive
+   ======================================== */
+
+/* High Contrast Text */
+.ui-text-readable {
+  color: #1f2937;
+  line-height: 1.7;
+  font-size: 1rem;
+}
+
+/* Adequate Line Length (45-75 characters optimal) */
+.ui-prose {
+  max-width: 65ch;
+  line-height: 1.7;
+}
+
+/* Accessible Focus States */
+*:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Touch-Friendly Targets (minimum 44x44px) */
+.ui-touch-target {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* WCAG AA Contrast Requirements */
+.ui-text-contrast-aa {
+  color: #1f2937; /* 4.5:1 on white */
+}
+
+.ui-text-contrast-aaa {
+  color: #111827; /* 7:1 on white */
+}
+
+/* Skip to Main Content (Accessibility) */
+.ui-skip-link {
+  position: absolute;
+  top: -100px;
+  left: 0;
+  background: var(--color-primary);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  z-index: 9999;
+  border-radius: 0 0 var(--radius-md) 0;
+}
+
+.ui-skip-link:focus {
+  top: 0;
+}
+
+/* Screen Reader Only */
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ========================================
+   UI RULE 8: RESPONSIVENESS & ADAPTABILITY
+   UI must work across devices and screen sizes
+   ======================================== */
+
+/* Mobile-First Breakpoints */
+:root {
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+}
+
+/* Responsive Typography */
+html {
+  font-size: 16px;
+}
+
+@media (max-width: 768px) {
+  html {
+    font-size: 14px;
+  }
+}
+
+/* Responsive Padding */
+.ui-responsive-padding {
+  padding: clamp(1rem, 5vw, 3rem);
+}
+
+/* Responsive Grid */
+.ui-responsive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: var(--space-lg);
+}
+
+/* Mobile Navigation */
+@media (max-width: 768px) {
+  .ui-hide-mobile {
+    display: none;
+  }
+}
+
+@media (min-width: 769px) {
+  .ui-hide-desktop {
+    display: none;
+  }
+}
+
+/* Touch vs Mouse */
+@media (hover: hover) and (pointer: fine) {
+  /* Desktop: subtle hover effects */
+  .ui-hover-desktop:hover {
+    transform: translateY(-2px);
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  /* Mobile: larger touch targets, no hover */
+  .ui-touch-target {
+    min-height: 48px;
+    min-width: 48px;
+  }
+}
+
+/* Fluid Images */
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ============================================
+   END UI DESIGN SYSTEM
+   ============================================ */

@@ -46,17 +46,19 @@ export default function LoginPage() {
       console.error('Error signing in:', err);
       
       // Provide user-friendly error messages
-      let errorMessage = 'Failed to sign in with Google';
+      let errorMessage = 'Failed to sign in with Google. Please try again.';
       if (err.code === 'auth/popup-closed-by-user') {
-        errorMessage = 'Sign-in was cancelled. Please try again.';
+        errorMessage = '✗ Sign-in was cancelled. Click below to try again.';
       } else if (err.code === 'auth/popup-blocked') {
-        errorMessage = 'Popup was blocked. Please allow popups for this site and try again.';
+        errorMessage = '✗ Popup was blocked. Please allow popups for this site in your browser settings and try again.';
       } else if (err.code === 'auth/network-request-failed') {
-        errorMessage = 'Network error. Please check your internet connection and try again.';
+        errorMessage = '✗ Network error. Please check your internet connection and try again.';
       } else if (err.code === 'auth/unauthorized-domain') {
-        errorMessage = 'This domain is not authorized. Please contact support.';
+        errorMessage = '✗ This domain is not authorized. Please contact support at ricepaddy.contact@gmail.com.';
+      } else if (err.code === 'auth/too-many-requests') {
+        errorMessage = '✗ Too many attempts. Please wait a few minutes and try again.';
       } else if (err.message) {
-        errorMessage = err.message;
+        errorMessage = `✗ ${err.message}`;
       }
       
       setError(errorMessage);
@@ -106,13 +108,13 @@ export default function LoginPage() {
             </div>
             
             <div>
-              <h1 className="text-4xl lg:text-7xl font-black text-white mb-2 lg:mb-4 tracking-tight drop-shadow-lg" style={{ fontFamily: "'Courier New', Courier, monospace" }}>
+              <h1 className="text-4xl lg:text-7xl font-black text-white mb-2 lg:mb-4 tracking-tight drop-shadow-lg ui-heading-primary" style={{ fontFamily: "'Courier New', Courier, monospace" }}>
                 PadBuddy
               </h1>
-              <p className="text-white/95 text-base lg:text-2xl font-light tracking-wide mb-3 lg:mb-6" style={{ fontFamily: "'Courier New', Courier, monospace" }}>
+              <p className="text-white/95 text-base lg:text-2xl font-light tracking-wide mb-3 lg:mb-6 ui-text-lead" style={{ fontFamily: "'Courier New', Courier, monospace" }}>
                 Your Smart Rice Farming Companion
               </p>
-              <p className="text-white/90 text-sm lg:text-lg leading-relaxed max-w-lg mx-auto lg:mx-0 hidden lg:block">
+              <p className="text-white/90 text-sm lg:text-lg leading-relaxed max-w-lg mx-auto lg:mx-0 hidden lg:block ui-text-readable ui-prose">
                 Empowering Filipino rice farmers with smart technology solutions for better yields and efficient field management.
               </p>
             </div>
@@ -167,8 +169,9 @@ export default function LoginPage() {
               <button
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 px-6 py-4 rounded-xl font-semibold text-base hover:bg-gray-50 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none border-2 border-gray-200 hover:border-green-300"
+                className="w-full flex items-center justify-center gap-4 bg-white text-gray-700 px-6 py-4 rounded-xl font-semibold text-base hover:bg-gray-50 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none border-2 border-gray-200 hover:border-green-300 ui-touch-target ui-clickable-affordance ui-hover-lift"
                 style={{ fontFamily: "'Courier New', Courier, monospace" }}
+                title="Sign in with your Google account (UI Rule 4: Clear affordance)"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
@@ -213,8 +216,22 @@ export default function LoginPage() {
                     </div>
                     <div className="flex-1">
                       <p className="text-sm text-red-800 font-semibold mb-1">Sign in failed</p>
-                      <p className="text-xs text-red-700" style={{ fontFamily: "'Courier New', Courier, monospace" }}>{error}</p>
+                      <p className="text-xs text-red-700 mb-2" style={{ fontFamily: "'Courier New', Courier, monospace" }}>{error}</p>
+                      <button
+                        onClick={() => { setError(null); handleGoogleSignIn(); }}
+                        className="text-xs px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-semibold"
+                        title="Try signing in again (HCI Rule 6: Easy retry)"
+                      >
+                        ↻ Retry Sign In
+                      </button>
                     </div>
+                    <button
+                      onClick={() => setError(null)}
+                      className="text-red-600 hover:text-red-800 transition-colors"
+                      title="Dismiss error"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
                   </div>
                 </div>
               )}
@@ -274,8 +291,9 @@ export default function LoginPage() {
               <button
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 px-5 py-4 rounded-xl font-semibold text-base hover:bg-gray-50 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none border-2 border-gray-200 hover:border-green-300"
+                className="w-full flex items-center justify-center gap-3 bg-white text-gray-700 px-5 py-4 rounded-xl font-semibold text-base hover:bg-gray-50 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none border-2 border-gray-200 hover:border-green-300 ui-touch-target ui-clickable-affordance"
                 style={{ fontFamily: "'Courier New', Courier, monospace" }}
+                title="Sign in with your Google account"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
@@ -320,8 +338,22 @@ export default function LoginPage() {
                     </div>
                     <div className="flex-1">
                       <p className="text-sm text-red-800 font-semibold mb-1">Sign in failed</p>
-                      <p className="text-xs text-red-700" style={{ fontFamily: "'Courier New', Courier, monospace" }}>{error}</p>
+                      <p className="text-xs text-red-700 mb-2" style={{ fontFamily: "'Courier New', Courier, monospace" }}>{error}</p>
+                      <button
+                        onClick={() => { setError(null); handleGoogleSignIn(); }}
+                        className="text-xs px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors font-semibold"
+                        title="Try signing in again (HCI Rule 6: Easy retry)"
+                      >
+                        ↻ Retry
+                      </button>
                     </div>
+                    <button
+                      onClick={() => setError(null)}
+                      className="text-red-600 hover:text-red-800 transition-colors"
+                      title="Dismiss error"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
                   </div>
                 </div>
               )}

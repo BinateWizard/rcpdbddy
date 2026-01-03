@@ -60,6 +60,9 @@ export default function AdminDevices() {
   const [filterStatus, setFilterStatus] = useState<'all' | 'online' | 'offline'>('all');
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
+  const [lastFilter, setLastFilter] = useState<'all' | 'online' | 'offline'>('all');
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -88,6 +91,8 @@ export default function AdminDevices() {
 
   const fetchDevices = async () => {
     setRefreshing(true);
+    setSuccessMessage('');
+    setShowSuccess(false);
     try {
       const devicesData: DeviceData[] = [];
       
@@ -149,8 +154,14 @@ export default function AdminDevices() {
       }
 
       setDevices(devicesData);
+      setSuccessMessage(`✓ Successfully loaded ${devicesData.length} device(s)`);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       console.error('Error fetching devices:', error);
+      setSuccessMessage('✗ Error: Failed to load devices. Please try again.');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 5000);
     } finally {
       setRefreshing(false);
     }
@@ -294,20 +305,22 @@ export default function AdminDevices() {
                 variant="ghost"
                 size="icon"
                 onClick={() => router.push('/admin')}
-                className="text-slate-400 hover:text-white hover:bg-slate-700 h-8 w-8 sm:h-10 sm:w-10"
+                className="text-slate-400 hover:text-white hover:bg-slate-700 h-8 w-8 sm:h-10 sm:w-10 ui-touch-target ui-clickable-affordance"
+                title="Back to admin dashboard"
               >
                 <ArrowLeft className="h-4 w-4 sm:h-5 sm:w-5" />
               </Button>
               <div>
-                <h1 className="text-lg sm:text-2xl font-bold text-white">Devices Management</h1>
-                <p className="text-xs sm:text-sm text-slate-400">Monitor all connected IoT devices</p>
+                <h1 className="text-lg sm:text-2xl font-bold text-white ui-heading-secondary">Devices Management</h1>
+                <p className="text-xs sm:text-sm text-slate-400 ui-text-small">Monitor all connected IoT devices</p>
               </div>
             </div>
             <Button
               onClick={fetchDevices}
               disabled={refreshing}
               size="sm"
-              className="bg-green-600 hover:bg-green-700 text-xs sm:text-sm"
+              className="bg-green-600 hover:bg-green-700 text-xs sm:text-sm ui-btn-primary ui-clickable-affordance"
+              title="Refresh device list"
             >
               <RefreshCw className={`h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2 ${refreshing ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
@@ -357,43 +370,89 @@ export default function AdminDevices() {
             </Card>
           </div>
 
+          {/* Success/Error Banner - HCI Rule 3 & 4 */}
+          {showSuccess && (
+            <div className={`mb-4 p-3 rounded-lg border-2 flex items-center justify-between animate-fade-in ${
+              successMessage.startsWith('✓') 
+                ? 'bg-green-100 border-green-500' 
+                : 'bg-red-100 border-red-500'
+            }`}>
+              <span className={`font-semibold text-sm ${
+                successMessage.startsWith('✓') ? 'text-green-800' : 'text-red-800'
+              }`}>
+                {successMessage}
+              </span>
+              <button
+                onClick={() => setShowSuccess(false)}
+                className="text-sm px-2 py-1 hover:bg-white/50 rounded transition-colors"
+                title="Dismiss message"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Search & Filter */}
           <div className="flex flex-col gap-3 mb-4 sm:mb-6">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 sm:h-5 sm:w-5 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search devices..."
+                placeholder="Search devices by ID, name, field, or owner... (HCI Rule 8: Clear context)"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 sm:pl-10 pr-4 py-2.5 sm:py-3 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+                className="w-full pl-9 sm:pl-10 pr-20 py-2.5 sm:py-3 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+                title="Type to search across all device fields"
               />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded transition-colors"
+                  title="Clear search (HCI Rule 2: Quick action)"
+                >
+                  Clear
+                </button>
+              )}
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
               <Button
                 variant={filterStatus === 'all' ? 'default' : 'outline'}
-                onClick={() => setFilterStatus('all')}
+                onClick={() => { setLastFilter(filterStatus); setFilterStatus('all'); }}
                 size="sm"
-                className={`flex-shrink-0 text-xs ${filterStatus === 'all' ? 'bg-green-600 hover:bg-green-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                className={`flex-shrink-0 text-xs ui-touch-target ui-clickable-affordance ${filterStatus === 'all' ? 'bg-green-600 hover:bg-green-700 ui-state-success' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                title="Show all devices (UI Rule 2: Quick access)"
               >
                 All
               </Button>
               <Button
                 variant={filterStatus === 'online' ? 'default' : 'outline'}
-                onClick={() => setFilterStatus('online')}
+                onClick={() => { setLastFilter(filterStatus); setFilterStatus('online'); }}
                 size="sm"
-                className={`flex-shrink-0 text-xs ${filterStatus === 'online' ? 'bg-green-600 hover:bg-green-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                className={`flex-shrink-0 text-xs ui-touch-target ui-clickable-affordance ${filterStatus === 'online' ? 'bg-green-600 hover:bg-green-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                title="Show only online devices"
               >
                 <Wifi className="h-3 w-3 mr-1" /> Online
               </Button>
               <Button
                 variant={filterStatus === 'offline' ? 'default' : 'outline'}
-                onClick={() => setFilterStatus('offline')}
+                onClick={() => { setLastFilter(filterStatus); setFilterStatus('offline'); }}
                 size="sm"
-                className={`flex-shrink-0 text-xs ${filterStatus === 'offline' ? 'bg-red-600 hover:bg-red-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                className={`flex-shrink-0 text-xs ui-touch-target ui-clickable-affordance ${filterStatus === 'offline' ? 'bg-red-600 hover:bg-red-700' : 'border-slate-600 text-slate-300 hover:bg-slate-700'}`}
+                title="Show only offline devices"
               >
                 <WifiOff className="h-3 w-3 mr-1" /> Offline
               </Button>
+              {filterStatus !== lastFilter && filterStatus !== 'all' && (
+                <Button
+                  variant="outline"
+                  onClick={() => setFilterStatus(lastFilter)}
+                  size="sm"
+                  className="flex-shrink-0 text-xs border-slate-600 text-slate-300 hover:bg-slate-700 ui-touch-target ui-clickable-affordance"
+                  title="Undo filter change (HCI Rule 6 & UI Rule 4: Clear affordance)"
+                >
+                  ↶ Undo
+                </Button>
+              )}
             </div>
           </div>
 
