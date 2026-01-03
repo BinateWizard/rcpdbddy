@@ -39,21 +39,20 @@ export const verifyLiveCommand = functions.database
     try {
       const firestore = admin.firestore();
       
-      // Get device document
+      // Get device document (optional)
       const devicesQuery = await firestore
         .collection('devices')
         .where('deviceId', '==', deviceId)
         .limit(1)
         .get();
-      
-      if (devicesQuery.empty) {
-        console.warn(`[Command Verify] Device ${deviceId} not found in Firestore`);
-        return null;
-      }
-      
-      const deviceDoc = devicesQuery.docs[0];
-      const deviceData = deviceDoc.data();
-      const deviceDocId = deviceDoc.id;
+
+      // Device document may not exist yet (e.g. during initial bring-up).
+      // In that case we still want to update RTDB relay state so the
+      // frontend and ESP32 can recover state on boot, but we skip
+      // Firestore logging/notifications.
+      const deviceDoc = devicesQuery.empty ? null : devicesQuery.docs[0];
+      const deviceData = deviceDoc ? deviceDoc.data() : null;
+      const deviceDocId = deviceDoc ? deviceDoc.id : null;
       
       // Check if status changed to executed or failed
       const statusChanged = previousData?.status !== commandData.status;
@@ -78,31 +77,35 @@ export const verifyLiveCommand = functions.database
         // Determine the actual state from ESP32 response
         const relayState = commandData.actualState || (commandData.action === 'on' || commandData.action === 'ON' ? 'ON' : 'OFF');
         
-        // Log to Firestore
-        const logData = {
-          type: 'live',
-          command: commandData.action || `relay${commandData.relay}_${relayState}`,
-          requestedState: commandData.action?.toUpperCase() || 'UNKNOWN',
-          actualState: success ? relayState : 'FAILED',
-          success: success,
-          timestamp: Date.now(),
-          commandId: relayId,
-          functionTriggered: 'verifyLiveCommand',
-          userId: deviceData.ownerId,
-          details: {
-            relay: commandData.relay,
-            result: commandData.result || null,
-            executedAt: commandData.timestamp
-          }
-        };
-        
-        await firestore
-          .collection('devices')
-          .doc(deviceDocId)
-          .collection('logs')
-          .add(logData);
-        
-        console.log(`[Command Verify] Logged ${success ? 'SUCCESS' : 'FAILURE'} for ${nodeId}/${relayId}`);
+        // Log to Firestore (only if device document exists)
+        if (deviceDocId) {
+          const logData = {
+            type: 'live',
+            command: commandData.action || `relay${commandData.relay}_${relayState}`,
+            requestedState: commandData.action?.toUpperCase() || 'UNKNOWN',
+            actualState: success ? relayState : 'FAILED',
+            success: success,
+            timestamp: Date.now(),
+            commandId: relayId,
+            functionTriggered: 'verifyLiveCommand',
+            userId: deviceData?.ownerId,
+            details: {
+              relay: commandData.relay,
+              result: commandData.result || null,
+              executedAt: commandData.timestamp
+            }
+          };
+
+          await firestore
+            .collection('devices')
+            .doc(deviceDocId)
+            .collection('logs')
+            .add(logData);
+          
+          console.log(`[Command Verify] Logged ${success ? 'SUCCESS' : 'FAILURE'} for ${nodeId}/${relayId}`);
+        } else {
+          console.log(`[Command Verify] Skipping Firestore log for ${deviceId} (device document not found)`);
+        }
         
         // Store relay state in RTDB for device recovery on boot
         console.log(`[Command Verify] Checking relay state storage - success: ${success}, relay: ${commandData.relay}, actualState: ${commandData.actualState}`);
@@ -128,7 +131,7 @@ export const verifyLiveCommand = functions.database
         }
         
         // If failed, notify user
-        if (failed) {
+        if (failed && deviceData?.ownerId) {
           const userRef = firestore.collection('users').doc(deviceData.ownerId);
           const userDoc = await userRef.get();
           

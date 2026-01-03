@@ -134,6 +134,35 @@ export default function DeviceDetail() {
     return () => unsubscribes.forEach(unsub => unsub());
   }, [deviceId]);
 
+  // Fallback: derive relay states from latest commands if /relays is missing
+  // This keeps the UI in sync even before verifyLiveCommand populates relays
+  useEffect(() => {
+    if (!deviceId) return;
+
+    const commandsRef = ref(database, `devices/${deviceId}/commands/ESP32A`);
+    const unsubscribe = onValue(commandsRef, (snapshot) => {
+      const commands = snapshot.val();
+      if (!commands) return;
+
+      setRelayStates((prev) => {
+        const next = [...prev];
+
+        for (let i = 1; i <= 4; i++) {
+          const cmd = commands[`relay${i}`];
+          if (!cmd) continue;
+
+          const rawState = (cmd.actualState || cmd.action || '').toString().toUpperCase();
+          const isOn = rawState === 'ON' || rawState === '1' || rawState === 'TRUE';
+          next[i - 1] = isOn;
+        }
+
+        return next;
+      });
+    });
+
+    return () => unsubscribe();
+  }, [deviceId]);
+
   // Load existing boundary coordinates from Firestore
   useEffect(() => {
     const loadBoundary = async () => {
@@ -831,31 +860,13 @@ export default function DeviceDetail() {
             onViewLocation={handleViewLocation}
           />
 
-          {/* Sensor Readings Component */}
+          {/* Sensor Readings Component (Current Readings) */}
           <SensorReadings
             paddyLiveData={paddyLiveData}
             weatherData={weatherData}
           />
 
-          {/* Control Panel Component - Replaces inline controls */}
-          <ControlPanel
-            isScanning={isScanning}
-            lastScanTime={lastScanTime}
-            scanSuccess={scanSuccess}
-            hasSavedBoundary={hasSavedBoundary}
-            gpsData={gpsData}
-            relayStates={relayStates}
-            relayProcessing={relayProcessing}
-            motorExtended={motorExtended}
-            motorProcessing={motorProcessing}
-            onScanNow={handleScanNow}
-            onOpenBoundaryMap={() => setShowBoundaryModal(true)}
-            onViewLocation={handleViewLocation}
-            onRelayToggle={handleRelayToggle}
-            onMotorToggle={handleMotorToggle}
-          />
-
-          {/* NPK Statistics Component */}
+          {/* NPK Statistics Component (part of data insights) */}
           {user && paddyInfo && fieldInfo && (
             <DeviceStatistics 
               userId={user.uid}
@@ -866,7 +877,7 @@ export default function DeviceDetail() {
             />
           )}
 
-          {/* Data Trends */}
+          {/* Data Trends Component */}
           <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <h3 className="text-lg font-semibold text-gray-900">Data Trends</h3>
@@ -1215,6 +1226,24 @@ export default function DeviceDetail() {
               })()}
             </div>
           </div>
+
+          {/* Device Control Component (Control Panel) */}
+          <ControlPanel
+            isScanning={isScanning}
+            lastScanTime={lastScanTime}
+            scanSuccess={scanSuccess}
+            hasSavedBoundary={hasSavedBoundary}
+            gpsData={gpsData}
+            relayStates={relayStates}
+            relayProcessing={relayProcessing}
+            motorExtended={motorExtended}
+            motorProcessing={motorProcessing}
+            onScanNow={handleScanNow}
+            onOpenBoundaryMap={() => setShowBoundaryModal(true)}
+            onViewLocation={handleViewLocation}
+            onRelayToggle={handleRelayToggle}
+            onMotorToggle={handleMotorToggle}
+          />
 
           {/* Control Panel */}
           <div className="bg-white rounded-2xl shadow-lg p-6 mb-6 border-0" style={{display: 'none'}}>
