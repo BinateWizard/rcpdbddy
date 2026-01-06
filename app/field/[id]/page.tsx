@@ -301,34 +301,11 @@ export default function FieldDetail() {
     }
   }, [activeTab, paddies.length, fetchDeviceReadings]);
   
-  // Calculate area based on paddy shape
-  const calculatePaddyArea = (
-    shapeType: 'rectangle' | 'trapezoid',
-    length: string,
-    width: string,
-    width2: string
-  ) => {
-    if (!length) return null;
-    
-    if (shapeType === 'rectangle') {
-      if (!width) return null;
-      return parseFloat(length) * parseFloat(width);
-    } else if (shapeType === 'trapezoid') {
-      if (!width || !width2) return null;
-      return ((parseFloat(width) + parseFloat(width2)) / 2) * parseFloat(length);
-    }
-    return null;
-  };
-  
   // Handle add device submission
   const handleAddDevice = async (data: {
     paddyName: string;
     paddyDescription: string;
     deviceId: string;
-    paddyShapeType: 'rectangle' | 'trapezoid';
-    paddyLength: string;
-    paddyWidth: string;
-    paddyWidth2: string;
   }) => {
     setIsVerifying(true);
     try {
@@ -351,24 +328,18 @@ export default function FieldDetail() {
         throw new Error("Device is already connected to another user");
       }
 
-      const areaM2 = calculatePaddyArea(data.paddyShapeType, data.paddyLength, data.paddyWidth, data.paddyWidth2);
-      const areaHectares = areaM2 ? areaM2 / 10000 : null;
-
-      // Create paddy document with area metadata
+      // Create paddy document WITHOUT area (will be set via boundary mapping)
       const paddyRef = doc(collection(db, `users/${user.uid}/fields/${fieldId}/paddies`));
       await setDoc(paddyRef, {
         paddyName: data.paddyName.trim(),
         description: data.paddyDescription.trim(),
         deviceId: data.deviceId.trim(),
-        shapeType: data.paddyShapeType,
-        length: data.paddyLength ? parseFloat(data.paddyLength) : null,
-        width: data.paddyWidth ? parseFloat(data.paddyWidth) : null,
-        width2: data.paddyShapeType === 'trapezoid' && data.paddyWidth2 ? parseFloat(data.paddyWidth2) : null,
-        areaM2,
-        areaHectares,
         connectedAt: new Date().toISOString(),
         status: 'connected',
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        // Area will be calculated from boundary mapping
+        areaM2: null,
+        areaHectares: null
       });
 
       // Update device in RTDB to mark it as connected to this user and field
@@ -382,14 +353,8 @@ export default function FieldDetail() {
         status: 'connected'
       });
       
-      // Refresh paddies list
-      const paddiesRef = collection(db, `users/${user.uid}/fields/${fieldId}/paddies`);
-      const paddiesSnapshot = await getDocs(paddiesRef);
-      const paddiesData = paddiesSnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setPaddies(paddiesData);
+      // Redirect to boundary mapping page for the new paddy
+      router.push(`/device/${data.deviceId.trim()}/boundary-map`);
     } finally {
       setIsVerifying(false);
     }

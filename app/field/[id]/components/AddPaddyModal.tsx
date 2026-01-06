@@ -10,10 +10,6 @@ interface AddPaddyModalProps {
     paddyName: string;
     paddyDescription: string;
     deviceId: string;
-    paddyShapeType: 'rectangle' | 'trapezoid';
-    paddyLength: string;
-    paddyWidth: string;
-    paddyWidth2: string;
   }) => Promise<void>;
   isVerifying: boolean;
 }
@@ -22,10 +18,6 @@ export function AddPaddyModal({ isOpen, onClose, onSubmit, isVerifying }: AddPad
   const [paddyName, setPaddyName] = useState("");
   const [paddyDescription, setPaddyDescription] = useState("");
   const [deviceId, setDeviceId] = useState("");
-  const [paddyShapeType, setPaddyShapeType] = useState<'rectangle' | 'trapezoid'>('rectangle');
-  const [paddyLength, setPaddyLength] = useState("");
-  const [paddyWidth, setPaddyWidth] = useState("");
-  const [paddyWidth2, setPaddyWidth2] = useState("");
   const [errors, setErrors] = useState<{[key: string]: string}>({});
 
   const handleClose = () => {
@@ -33,10 +25,6 @@ export function AddPaddyModal({ isOpen, onClose, onSubmit, isVerifying }: AddPad
     setPaddyName("");
     setPaddyDescription("");
     setDeviceId("");
-    setPaddyShapeType('rectangle');
-    setPaddyLength("");
-    setPaddyWidth("");
-    setPaddyWidth2("");
     onClose();
   };
 
@@ -63,29 +51,12 @@ export function AddPaddyModal({ isOpen, onClose, onSubmit, isVerifying }: AddPad
       await onSubmit({
         paddyName,
         paddyDescription,
-        deviceId,
-        paddyShapeType,
-        paddyLength,
-        paddyWidth,
-        paddyWidth2
+        deviceId
       });
       handleClose();
     } catch (error: any) {
       setErrors({ submit: error.message || 'Failed to add paddy' });
     }
-  };
-
-  const calculatePaddyArea = () => {
-    if (!paddyLength) return null;
-    
-    if (paddyShapeType === 'rectangle') {
-      if (!paddyWidth) return null;
-      return parseFloat(paddyLength) * parseFloat(paddyWidth);
-    } else if (paddyShapeType === 'trapezoid') {
-      if (!paddyWidth || !paddyWidth2) return null;
-      return ((parseFloat(paddyWidth) + parseFloat(paddyWidth2)) / 2) * parseFloat(paddyLength);
-    }
-    return null;
   };
 
   if (!isOpen) return null;
@@ -183,105 +154,19 @@ export function AddPaddyModal({ isOpen, onClose, onSubmit, isVerifying }: AddPad
                 <p className="mt-1.5 text-xs text-gray-500">Format: DEVICE_0001</p>
               </div>
 
-              {/* Paddy Dimensions / Area */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Field Shape
-                </label>
-                <select
-                  value={paddyShapeType}
-                  onChange={(e) => {
-                    setPaddyShapeType(e.target.value as 'rectangle' | 'trapezoid');
-                    setErrors(prev => ({ ...prev, area: "" }));
-                  }}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900 mb-3"
-                >
-                  <option value="rectangle">Rectangle</option>
-                  <option value="trapezoid">Trapezoid (varying width)</option>
-                </select>
-                <p className="text-xs text-gray-500 mb-4">
-                  {paddyShapeType === 'rectangle' 
-                    ? 'For rectangular paddies with uniform width'
-                    : 'For paddies where one end is wider than the other'}
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  Paddy Dimensions (for area)
-                </label>
-                <div className="grid grid-cols-2 gap-3 mb-3">
+              {/* Boundary Mapping Info */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <svg className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                  </svg>
                   <div>
-                    <label className="block text-xs text-gray-600 mb-1">Length (m)</label>
-                    <input
-                      type="number"
-                      value={paddyLength}
-                      onChange={(e) => {
-                        setPaddyLength(e.target.value);
-                        setErrors(prev => ({ ...prev, area: "" }));
-                      }}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900"
-                      placeholder="e.g., 50"
-                      step="0.1"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-600 mb-1">
-                      {paddyShapeType === 'rectangle' ? 'Width (m)' : 'Width 1 (m)'}
-                    </label>
-                    <input
-                      type="number"
-                      value={paddyWidth}
-                      onChange={(e) => {
-                        setPaddyWidth(e.target.value);
-                        setErrors(prev => ({ ...prev, area: "" }));
-                      }}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900"
-                      placeholder="e.g., 40"
-                      step="0.1"
-                    />
+                    <h4 className="font-semibold text-blue-900 mb-1">📍 Boundary Mapping Required</h4>
+                    <p className="text-sm text-blue-800">
+                      After adding this paddy, you'll be redirected to map its boundary by plotting GPS points. This will automatically calculate the accurate area.
+                    </p>
                   </div>
                 </div>
-                {paddyShapeType === 'trapezoid' && (
-                  <div className="mb-3">
-                    <label className="block text-xs text-gray-600 mb-1">Width 2 (m)</label>
-                    <input
-                      type="number"
-                      value={paddyWidth2}
-                      onChange={(e) => {
-                        setPaddyWidth2(e.target.value);
-                        setErrors(prev => ({ ...prev, area: "" }));
-                      }}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent bg-white text-gray-900"
-                      placeholder="e.g., 45"
-                      step="0.1"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">Width at the other end of the paddy</p>
-                  </div>
-                )}
-
-                {errors.area && (
-                  <p className="text-red-500 text-sm mt-1.5 flex items-center gap-1">
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                    </svg>
-                    {errors.area}
-                  </p>
-                )}
-
-                {calculatePaddyArea() && (
-                  <div className="mt-3 space-y-1.5 p-3 bg-green-50 rounded-lg border border-green-200">
-                    <p className="text-sm text-green-700 font-medium">
-                      📐 Area: {calculatePaddyArea()?.toFixed(2)} m²
-                    </p>
-                    <p className="text-sm text-emerald-700 font-medium">
-                      🌾 Hectares: {((calculatePaddyArea() || 0) / 10000).toFixed(4)} ha
-                    </p>
-                  </div>
-                )}
-                <p className="text-xs text-gray-500 mt-2">
-                  Enter the dimensions of this paddy to store its area for fertilizer and yield calculations.
-                </p>
               </div>
 
               <div className="flex gap-3 pt-4">

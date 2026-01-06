@@ -1076,11 +1076,13 @@ function LogsControls() {
     const q = query(actionsRef, orderBy('timestamp', 'desc'));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
+      console.log(`[Logs] Fetched ${snapshot.docs.length} documents from Firestore`);
       const arr = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
         timestamp: doc.data().timestamp?.toMillis() || Date.now()
       }));
+      console.log(`[Logs] Processed ${arr.length} entries for display`);
       setEntries(arr);
       setLoading(false);
       if (page >= Math.ceil(arr.length / perPage)) {
@@ -1107,14 +1109,79 @@ function LogsControls() {
         <>
       <div className="space-y-3">
         {visible.length === 0 && <div className="text-black">No history available.</div>}
-        {visible.map((e) => (
-          <div key={e.id} className="p-3 rounded bg-white shadow-sm">
-            <div className="text-sm text-black font-medium">{e.action}</div>
-            <div className="text-xs text-black">Device: {e.deviceId || 'N/A'}</div>
-            <div className="text-xs text-black">{e.details ? JSON.stringify(e.details) : ''}</div>
-            <div className="text-xs text-gray-500">{e.timestamp ? formatTimeAgo(e.timestamp) : ''}</div>
-          </div>
-        ))}
+        {visible.map((e) => {
+          const details = e.details || {};
+          const isError = details.error || details.status === 'error' || details.status === 'timeout' || details.status === 'failed';
+          const isSuccess = details.success || details.status === 'success' || details.status === 'completed';
+          
+          return (
+            <div 
+              key={e.id} 
+              className={`p-3 rounded-lg border-2 transition-all ${
+                isError ? 'bg-red-50 border-red-200' : 
+                isSuccess ? 'bg-green-50 border-green-200' : 
+                'bg-white border-gray-200'
+              }`}
+            >
+              {/* Header: Action and Time */}
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-900 truncate">{e.action}</div>
+                  <div className="text-xs text-gray-600 mt-0.5">
+                    Device: <span className="font-mono">{e.deviceId || 'N/A'}</span>
+                  </div>
+                </div>
+                <div className="text-[10px] text-gray-500 whitespace-nowrap">
+                  {e.timestamp ? formatTimeAgo(e.timestamp) : ''}
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              {details.status && (
+                <div className="mb-2">
+                  <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    isError ? 'bg-red-100 text-red-700 border border-red-300' :
+                    isSuccess ? 'bg-green-100 text-green-700 border border-green-300' :
+                    'bg-gray-100 text-gray-700 border border-gray-300'
+                  }`}>
+                    {details.status.toUpperCase()}
+                  </span>
+                </div>
+              )}
+
+              {/* Message */}
+              {details.message && (
+                <div className={`text-xs mb-1 ${
+                  isError ? 'text-red-700 font-medium' :
+                  isSuccess ? 'text-green-700' :
+                  'text-gray-700'
+                }`}>
+                  {details.message}
+                </div>
+              )}
+
+              {/* Error Details */}
+              {details.error && (
+                <div className="text-xs text-red-600 bg-red-100 rounded p-2 mb-1 font-mono">
+                  {details.error}
+                </div>
+              )}
+
+              {/* Additional Details */}
+              <div className="text-[10px] text-gray-600 space-y-0.5">
+                {details.via && (
+                  <div>Source: <span className="font-medium">{details.via}</span></div>
+                )}
+                {details.relay && (
+                  <div>Relay: <span className="font-medium">#{details.relay}</span></div>
+                )}
+                {details.duration && (
+                  <div>Duration: <span className="font-medium">{details.duration}ms</span></div>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="mt-4 flex items-center justify-between">
