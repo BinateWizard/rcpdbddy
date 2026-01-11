@@ -270,7 +270,7 @@ export function ControlPanel(props: ControlPanelProps) {
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h4 className="font-semibold text-gray-900">GPS Location</h4>
-                  <p className="text-xs text-gray-600 mt-1">ESP32B - Current device position</p>
+                  <p className="text-xs text-gray-600 mt-1">ESP32B - Get device coordinates</p>
                 </div>
                 <MapPin className="w-5 h-5 text-purple-600" />
               </div>
@@ -278,11 +278,11 @@ export function ControlPanel(props: ControlPanelProps) {
                 onClick={onViewLocation}
                 className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
               >
-                View Location
+                Get Location
               </button>
               {gpsData && gpsData.lat && gpsData.lng && (
                 <p className="text-xs text-gray-500 mt-2 text-center">
-                  {gpsData.lat.toFixed(4)}, {gpsData.lng.toFixed(4)}
+                  Last: {gpsData.lat.toFixed(4)}, {gpsData.lng.toFixed(4)}
                 </p>
               )}
             </div>
