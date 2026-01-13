@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { DeviceStatus, SensorReadings, ControlPanel, DeviceInformation, DataTrends, DeviceStatistics, BoundaryMappingModal, LocationModal, TrendsChart } from './components';
+import { DeviceStatus, SensorReadings, ControlPanel, DeviceInformation, DataTrends, DeviceStatistics, BoundaryMappingModal, LocationModal, TrendsChart, TimePickerSchedule } from './components';
 import { useWeatherData, useGPSData } from './hooks/useDeviceData';
 import { getVarietyByName } from '@/lib/utils/varietyHelpers';
 import { calculatePolygonArea, formatTimestamp, validateCoordinates, getDeviceStatusDisplay } from './utils/deviceHelpers';
@@ -1072,6 +1072,14 @@ export default function DeviceDetail() {
               await sendDeviceCommand(deviceId, 'ESP32C', 'npk', 'scan', {}, user.uid);
             }}
           />
+
+
+          {/* Schedule Time Picker Table/Module */}
+          {user && fieldInfo && (
+            <div className="mb-8">
+              <TimePickerSchedule userId={user.uid} farmId={fieldInfo.id} deviceId={deviceId} />
+            </div>
+          )}
 
           {/* Device Control Component (Control Panel) */}
           <ControlPanel

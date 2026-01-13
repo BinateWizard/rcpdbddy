@@ -8,3 +8,4 @@ export { DeviceStatistics } from './DeviceStatistics';
 export { TrendsChart } from './TrendsChart';
 export { BoundaryMappingModal } from './BoundaryMappingModal';
 export { LocationModal } from './LocationModal';
+export { default as TimePickerSchedule } from './TimePickerSchedule';

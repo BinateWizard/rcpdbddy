@@ -6,19 +6,20 @@ import { getDatabase } from "firebase/database";
 import { getMessaging, getToken, onMessage, Messaging } from "firebase/messaging";
 import { getFunctions } from "firebase/functions";
 
+// Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+  apiKey: "AIzaSyBwrVpys6cxJHMuc67ovAba5FlsoxfpXUs",
+  authDomain: "rice-padbuddy.firebaseapp.com",
+  databaseURL: "https://rice-padbuddy-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "rice-padbuddy",
+  storageBucket: "rice-padbuddy.firebasestorage.app",
+  messagingSenderId: "158398031046",
+  appId: "1:158398031046:web:b666a7b3a3b72eb2c263c7",
+  measurementId: "G-ZN52QCW2YR"
 };
 
 // Initialize Firebase (avoid duplicate initialization)
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const app = initializeApp(firebaseConfig);
 
 // Initialize services
 const auth = getAuth(app);
