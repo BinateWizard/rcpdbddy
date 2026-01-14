@@ -136,7 +136,11 @@ export const executeScheduledCommand = functions.firestore
         scheduleId: scheduleId
       };
       
-      await database.ref(`/devices/${deviceId}/commands/${commandId}`).set(commandData);
+      // Write to new ESP32A structure: /devices/{deviceId}/nodes/ESP32A/actions/relayN
+      const relayN = scheduleData.relay;
+      const actionPath = `/devices/${deviceId}/nodes/ESP32A/actions/relay${relayN}`;
+      await database.ref(actionPath).set(commandData);
+      // Optionally, you may want to also update audit fields or other metadata as needed
       
       console.log(`[Scheduled] Command ${commandId} sent to device ${deviceId}`);
       

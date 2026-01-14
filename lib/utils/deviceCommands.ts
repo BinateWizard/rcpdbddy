@@ -45,6 +45,8 @@ export interface CommandResult {
  * @param params - Command parameters
  * @param userId - User executing the command
  */
+import { set } from 'firebase/database';
+
 export async function sendDeviceCommand(
   deviceId: string,
   nodeId: 'ESP32A' | 'ESP32B' | 'ESP32C',
@@ -54,43 +56,51 @@ export async function sendDeviceCommand(
   userId: string
 ): Promise<CommandResult> {
   try {
-    // Call Cloud Function to validate and send command
-    const sendCommand = httpsCallable(functions, 'sendDeviceCommand');
-    const result = await sendCommand({
-      deviceId,
-      nodeId,
-      role,
-      action,
-      params
-    });
+    // Only support relay actions for ESP32A as per user request
+    if (nodeId === 'ESP32A' && role === 'relay') {
+      // Determine relay number from params or action
+      let relayNumber = params.relay || params.relayNumber || params.relayN;
+      if (!relayNumber && typeof action === 'string') {
+        const match = action.match(/relay(\d)/);
+        if (match) {
+          relayNumber = match[1];
+        }
+      }
+      if (!relayNumber && params.hasOwnProperty('relay1')) relayNumber = 1;
+      if (!relayNumber && params.hasOwnProperty('relay2')) relayNumber = 2;
+      if (!relayNumber && params.hasOwnProperty('relay3')) relayNumber = 3;
+      if (!relayNumber && params.hasOwnProperty('relay4')) relayNumber = 4;
+      if (!relayNumber) relayNumber = 1; // fallback
 
-    const data = result.data as any;
-    console.log(`[Live Command] Sent via Cloud Function to ${deviceId}: ${action}`, data);
-
-    if (!data.success) {
+      const commandPath = `devices/${deviceId}/nodes/ESP32A/actions/relay${relayNumber}`;
+      const issuedAt = Date.now();
+      const commandData = {
+        action: action.toLowerCase(),
+        status: 'pending',
+        issuedAt,
+        acknowledgedAt: null,
+        executedAt: null,
+        actualState: null,
+        ...params,
+        userId
+      };
+      await set(ref(database, commandPath), commandData);
       return {
-        success: false,
-        message: data.message || 'Failed to send command'
+        success: true,
+        message: `✓ Command sent to ESP32A relay${relayNumber}`,
+        status: 'pending'
       };
     }
-
-    // Return success immediately - command sent to RTDB
-    // ESP32 will poll and execute asynchronously
-    // Use real-time listeners in UI to show completion status
+    // For other nodes/roles, you can add logic as needed
     return {
-      success: true,
-      message: `✓ Command sent to ${nodeId}`,
-      status: 'pending'
+      success: false,
+      message: 'Direct RTDB command only supported for ESP32A relays.'
     };
   } catch (error: any) {
     console.error('[Live Command] Error sending command:', error);
-    
-    // Extract error message from Cloud Function error
-    const errorMessage = error?.message || error?.details || 'Unknown error';
-    
     return {
       success: false,
-      message: `✗ Failed to send command: ${errorMessage}`
+      message: `✗ Failed to send command: ${error?.message || 'Unknown error'}`
     };
   }
 }
@@ -112,21 +122,21 @@ async function waitForCommandComplete(
   const startTime = Date.now();
   const pollInterval = 500; // Check every 500ms
 
+
   while (Date.now() - startTime < timeout) {
     try {
-      const commandPath = `devices/${deviceId}/commands/${nodeId}/${commandType}`;
+      // New RTDB path: devices/{deviceId}/nodes/{nodeId}/actions/{commandType}
+      const commandPath = `devices/${deviceId}/nodes/${nodeId}/actions/${commandType}`;
       const commandRef = ref(database, commandPath);
       const snapshot = await get(commandRef);
 
       if (snapshot.exists()) {
         const command = snapshot.val();
-        
         // ESP32 sets status to "completed" when done
         if (command.status === 'completed' && command.executedAt) {
           console.log(`[Command] Completed by ${deviceId}/${nodeId}/${commandType}`, command);
           return { completed: true, executedAt: command.executedAt };
         }
-        
         // Check for error status
         if (command.status === 'error') {
           console.error(`[Command] Error from ${deviceId}/${nodeId}/${commandType}`, command);
@@ -286,9 +296,10 @@ export async function getCommandStatus(
   relayNumber?: number
 ): Promise<DeviceCommand | null> {
   try {
-    const commandPath = relayNumber 
-      ? `devices/${deviceId}/commands/${nodeId}/relay${relayNumber}`
-      : `devices/${deviceId}/commands/${nodeId}`;
+    // New RTDB path: devices/{deviceId}/nodes/{nodeId}/actions/relayN
+    const commandPath = relayNumber
+      ? `devices/${deviceId}/nodes/${nodeId}/actions/relay${relayNumber}`
+      : `devices/${deviceId}/nodes/${nodeId}/actions`;
     const commandRef = ref(database, commandPath);
     const snapshot = await get(commandRef);
 

@@ -20,7 +20,7 @@ const COMMAND_TIMEOUT = 30 * 1000; // 30 seconds
  * Handles both relay commands (relay1-4) and motor/GPS commands
  */
 export const verifyLiveCommand = functions.database
-  .ref('/devices/{deviceId}/commands/{nodeId}/{commandType}')
+  .ref('/devices/{deviceId}/nodes/{nodeId}/actions/{commandType}')
   .onWrite(async (change, context) => {
     const deviceId = context.params.deviceId;
     const nodeId = context.params.nodeId;

@@ -122,16 +122,14 @@ export default function DeviceDetail() {
     return () => unsubscribe();
   }, [deviceId]);
 
-  // Listen to relay states from RTDB (stored by Cloud Function)
-  // Listens to individual relays so it updates even if not all relays are stored yet
+
+  // Listen to relay states from new RTDB path: devices/{deviceId}/nodes/ESP32A/relays/{i}
   useEffect(() => {
     if (!deviceId) return;
 
     const unsubscribes: (() => void)[] = [];
-    
-    // Listen to each relay individually
     for (let i = 1; i <= 4; i++) {
-      const relayRef = ref(database, `devices/${deviceId}/relays/${i}`);
+      const relayRef = ref(database, `devices/${deviceId}/nodes/ESP32A/relays/${i}`);
       const unsubscribe = onValue(relayRef, (snapshot) => {
         if (snapshot.exists()) {
           const relayData = snapshot.val();
@@ -147,35 +145,6 @@ export default function DeviceDetail() {
     }
 
     return () => unsubscribes.forEach(unsub => unsub());
-  }, [deviceId]);
-
-  // Fallback: derive relay states from latest commands if /relays is missing
-  // This keeps the UI in sync even before verifyLiveCommand populates relays
-  useEffect(() => {
-    if (!deviceId) return;
-
-    const commandsRef = ref(database, `devices/${deviceId}/commands/ESP32A`);
-    const unsubscribe = onValue(commandsRef, (snapshot) => {
-      const commands = snapshot.val();
-      if (!commands) return;
-
-      setRelayStates((prev) => {
-        const next = [...prev];
-
-        for (let i = 1; i <= 4; i++) {
-          const cmd = commands[`relay${i}`];
-          if (!cmd) continue;
-
-          const rawState = (cmd.actualState || cmd.action || '').toString().toUpperCase();
-          const isOn = rawState === 'ON' || rawState === '1' || rawState === 'TRUE';
-          next[i - 1] = isOn;
-        }
-
-        return next;
-      });
-    });
-
-    return () => unsubscribe();
   }, [deviceId]);
 
   // Load existing boundary coordinates from Firestore

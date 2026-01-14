@@ -40,8 +40,7 @@ export {
   logCritical
 } from './systemLogger';
 
-// 8️⃣ Notification Dispatcher
-export * from './notificationDispatcher';
+// 8️⃣ Notification Dispatcher (removed)
 
 // 9️⃣ User Action Logger (includes sendTestNotification)
 export * from './userActionLogger';
@@ -608,27 +607,27 @@ export const sendDeviceCommand = functions.https.onCall(async (data, context) =>
       commandData.params = params;
     }
 
-    // Write command to RTDB - use 3-level paths for all command types
-    let commandPath: string;
+
+    // Always write to devices/{deviceId}/nodes/{nodeId}/actions/{actionType}
+    let actionType: string;
     if (role === 'relay' && params.relay) {
-      commandPath = `commands/${nodeId}/relay${params.relay}`;
+      actionType = `relay${params.relay}`;
     } else if (role === 'motor') {
-      commandPath = `commands/${nodeId}/motor`;
+      actionType = 'motor';
     } else if (role === 'gps') {
-      commandPath = `commands/${nodeId}/gps`;
+      actionType = 'gps';
     } else if (role === 'npk') {
-      commandPath = `commands/${nodeId}/npk`;
+      actionType = 'npk';
     } else {
-      // Default fallback
-      commandPath = `commands/${nodeId}/${role}`;
+      actionType = role;
     }
-    
-    await deviceRef.update({
-      [commandPath]: commandData,
-      [`audit/lastCommand`]: action,
-      [`audit/lastCommandBy`]: userId,
-      [`audit/lastCommandAt`]: now
-    });
+
+    const commandPath = `nodes/${nodeId}/actions/${actionType}`;
+
+    await deviceRef.child(`nodes/${nodeId}/actions/${actionType}`).set(commandData);
+    await deviceRef.child('audit/lastCommand').set(action);
+    await deviceRef.child('audit/lastCommandBy').set(userId);
+    await deviceRef.child('audit/lastCommandAt').set(now);
 
     // Log to Firestore (optional - don't fail command if logging fails)
     try {
@@ -649,7 +648,7 @@ export const sendDeviceCommand = functions.https.onCall(async (data, context) =>
     console.log(`[Command] Sent to ${deviceId}/${commandPath}: ${action} by ${userId}`);
 
     const responsePath = `devices/${deviceId}/${commandPath}`;
-    
+
     return {
       success: true,
       message: `Command ${action} sent to ${deviceId}`,
