@@ -1077,6 +1077,7 @@ export default function DeviceDetail() {
           {/* Schedule Time Picker Table/Module */}
           {user && fieldInfo && (
             <div className="mb-8">
+              {/* Updated: Schedule section uses Card, green accents, and consistent spacing/colors */}
               <TimePickerSchedule userId={user.uid} farmId={fieldInfo.id} deviceId={deviceId} />
             </div>
           )}

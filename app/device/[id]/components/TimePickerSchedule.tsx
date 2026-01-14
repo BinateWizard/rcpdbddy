@@ -95,57 +95,66 @@ const TimePickerSchedule: React.FC<TimePickerScheduleProps> = ({ userId, farmId,
   return (
     <div className="bg-white rounded-lg shadow p-6">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Schedule</h2>
-        <button className="btn btn-primary" onClick={() => { setShowModal(true); setEditId(null); setSelectedTime(''); }}>
+        <h2 className="text-lg font-semibold text-gray-900">Schedule</h2>
+        <button
+          type="button"
+          className="bg-green-600 text-white font-bold px-5 py-2 rounded-lg shadow-lg transition-colors focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-2 hover:bg-green-700 active:bg-green-800 text-base"
+          style={{ minWidth: '140px' }}
+          onClick={() => { setShowModal(true); setEditId(null); setSelectedTime(''); }}
+        >
           Add Schedule
         </button>
       </div>
       <table className="min-w-full border">
         <thead>
-          <tr className="bg-gray-100">
-            <th className="py-2 px-4 border-b">Time</th>
-            <th className="py-2 px-4 border-b">Edit</th>
-            <th className="py-2 px-4 border-b">Delete</th>
+          <tr className="bg-green-50">
+            <th className="py-2 px-4 border-b text-left text-green-800 font-semibold">Time</th>
+            <th className="py-2 px-4 border-b text-center text-gray-700 font-semibold">Edit</th>
+            <th className="py-2 px-4 border-b text-center text-gray-700 font-semibold">Delete</th>
           </tr>
         </thead>
         <tbody>
           {schedules.map(s => (
-            <tr key={s.key} className="text-center">
-              <td className="py-2 px-4 border-b">{s.time}</td>
+            <tr key={s.key} className="text-center bg-white hover:bg-green-50 transition-colors">
+              <td className="py-2 px-4 border-b text-green-700 font-mono text-base">{s.time}</td>
               <td className="py-2 px-4 border-b">
-                <button className="btn btn-sm btn-secondary" onClick={() => openEdit(s.key, s.time)}>Edit</button>
+                <button className="btn btn-sm btn-secondary text-gray-800 font-medium" onClick={() => openEdit(s.key, s.time)}>Edit</button>
               </td>
               <td className="py-2 px-4 border-b">
-                <button className="btn btn-sm btn-danger" onClick={() => handleDelete(s.key)}>Delete</button>
+                <button className="btn btn-sm btn-danger text-red-700 font-medium" onClick={() => handleDelete(s.key)}>Delete</button>
               </td>
             </tr>
           ))}
 
-
-
           {schedules.length === 0 && (
-            <tr><td colSpan={3} className="py-4 text-gray-400">No schedules yet.</td></tr>
+            <tr><td colSpan={3} className="py-4 text-gray-400 text-center">No schedules yet.</td></tr>
           )}
         </tbody>
       </table>
       <Dialog open={showModal} onOpenChange={(open) => { setShowModal(open); if (!open) { setEditId(null); setSelectedTime(''); } }}>
-        <DialogContent>
+        <DialogContent className="bg-white border-2 border-green-400 rounded-2xl shadow-xl p-8">
           <DialogHeader>
-            <DialogTitle>{editId ? 'Edit Schedule' : 'Add Schedule'}</DialogTitle>
+            <DialogTitle className="text-green-700 text-xl font-bold mb-4">{editId ? 'Edit Schedule' : 'Add Schedule'}</DialogTitle>
           </DialogHeader>
-          <select
-            className="w-full border rounded p-2 mb-4"
-            value={selectedTime}
-            onChange={e => setSelectedTime(e.target.value)}
-          >
-            <option value="">Select time</option>
-            {getTimeOptions().map(t => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+          <div className="mb-6">
+            <div className="mb-2 text-gray-700 font-medium">Select time</div>
+            <div className="grid grid-cols-4 gap-2">
+              {getTimeOptions().map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`px-3 py-2 rounded-lg border-2 font-mono text-base transition-colors focus:outline-none focus:ring-2 focus:ring-green-400 focus:ring-offset-2
+                    ${selectedTime === t ? 'bg-green-600 text-white border-green-600' : 'bg-white text-green-700 border-green-300 hover:bg-green-50'}`}
+                  onClick={() => setSelectedTime(t)}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
           <DialogFooter>
             <button
-              className="btn btn-primary w-full"
+              className="bg-green-600 hover:bg-green-700 active:bg-green-800 w-full text-white font-bold py-2 rounded-lg shadow-md transition-colors text-base"
               onClick={editId ? handleEdit : handleAdd}
               disabled={!selectedTime}
             >
