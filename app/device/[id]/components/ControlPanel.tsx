@@ -1,4 +1,45 @@
-import React from 'react';
+/**
+ * Frontend Configuration Instruction
+ *
+ * This frontend controls an ESP32 motor controller via direct HTTP
+ * The ESP32 runs a local WebServer on port 80
+ * NO Firebase
+ * NO RTDB
+ * NO backend server
+ * NO authentication
+ * Communication is direct browser → ESP32
+ *
+ * HTTP API
+ *
+ * Endpoint: /motor
+ * Method: GET
+ * Query parameters:
+ *   cmd: "forward" | "backward" | "stop" | "test"
+ *   speed: integer 0–100
+ * Example:
+ *   http://<ESP32_IP>/motor?cmd=forward&speed=75
+ * ESP32 responds with plain text
+ * UI must display raw response text
+ * One button click = one HTTP request
+ * Do not introduce state management, polling, or device abstractions
+ *
+ * ESP32 is the single source of truth for motor state
+ *
+ * ---
+ * Canonical Frontend Behavior
+ *
+ * Frontend is stateless
+ * No retries
+ * No background loops
+ * No command queues
+ * No syncing
+ * Button press sends request and shows response
+ *
+ * ---
+ * The ESP32 is a local actuator, not an IoT cloud device.
+ */
+
+import React, { useState } from 'react';
 import { Scan, Map, MapPin, Power, Loader2 } from 'lucide-react';
 
 interface ControlPanelProps {
@@ -19,6 +60,25 @@ interface ControlPanelProps {
 }
 
 export function ControlPanel(props: ControlPanelProps) {
+
+  // ESP32B Motor Controller (stateless, direct HTTP)
+  const [esp32bIp, setEsp32bIp] = useState('192.168.1.45');
+  const [motorCmd, setMotorCmd] = useState<'forward' | 'backward' | 'stop' | 'test'>('forward');
+  const [motorSpeed, setMotorSpeed] = useState(80);
+  const [esp32bResponse, setEsp32bResponse] = useState<string | null>(null);
+  const [esp32bLoading, setEsp32bLoading] = useState(false);
+
+  function sendMotorCommand(cmd: 'forward' | 'backward' | 'stop' | 'test', speed: number) {
+    setEsp32bLoading(true);
+    setEsp32bResponse(null);
+    const url = `http://${esp32bIp}/motor?cmd=${cmd}&speed=${speed}`;
+    fetch(url)
+      .then(res => res.text())
+      .then(text => setEsp32bResponse(text))
+      .catch(() => setEsp32bResponse('Connection failed'))
+      .finally(() => setEsp32bLoading(false));
+  }
+
   const {
     isScanning,
     lastScanTime,
@@ -224,67 +284,66 @@ export function ControlPanel(props: ControlPanelProps) {
           </div>
         </div>
 
-        {/* ESP32B - Motor & GPS */}
+
+        {/* ESP32B - Motor Controller (stateless, direct HTTP) */}
         <div>
           <div className="flex items-baseline justify-between mb-3">
             <div>
-              <h4 className="text-base font-semibold text-gray-900">ESP32B – Motor &amp; GPS</h4>
-              <p className="text-xs text-gray-600 mt-1">Controls motor position and reports GPS location</p>
+              <h4 className="text-base font-semibold text-gray-900">ESP32B – Motor Controller (Direct HTTP)</h4>
+              <p className="text-xs text-gray-600 mt-1">Direct browser → ESP32B. No backend. No state sync.</p>
             </div>
           </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Motor Control (ESP32B) */}
-            <div className="p-4 border border-gray-200 rounded-lg hover:border-blue-500 transition-colors">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="font-semibold text-gray-900">Motor Controller</h4>
-                  <p className="text-xs text-gray-600 mt-1">ESP32B - Extend/Retract</p>
-                </div>
-                <span className="text-lg">{motorExtended ? '⬆️' : '⬇️'}</span>
-              </div>
-              <button
-                onClick={onMotorToggle}
-                disabled={motorProcessing}
-                className={`w-full px-4 py-2 rounded-lg transition-colors font-medium flex items-center justify-center gap-2 ${
-                  motorProcessing
-                    ? 'bg-gray-400 cursor-not-allowed text-white'
-                    : motorExtended
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-blue-600 hover:bg-blue-700 text-white'
-                }`}
-              >
-                {motorProcessing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  motorExtended ? 'Retract Motor' : 'Extend Motor'
-                )}
-              </button>
+          <div className="p-4 border border-blue-200 rounded-lg">
+            <div className="mb-2 flex flex-col md:flex-row md:items-center gap-2">
+              <label className="text-xs font-medium text-gray-700">ESP32B IP:</label>
+              <input
+                type="text"
+                value={esp32bIp}
+                onChange={e => setEsp32bIp(e.target.value)}
+                className="border px-2 py-1 rounded w-48 text-sm"
+                placeholder="192.168.1.45"
+                autoComplete="off"
+              />
             </div>
-
-            {/* GPS Location */}
-            <div className="p-4 border border-gray-200 rounded-lg hover:border-purple-500 transition-colors">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h4 className="font-semibold text-gray-900">GPS Location</h4>
-                  <p className="text-xs text-gray-600 mt-1">ESP32B - Get device coordinates</p>
-                </div>
-                <MapPin className="w-5 h-5 text-purple-600" />
-              </div>
+            <div className="flex flex-wrap gap-2 mb-2">
               <button
-                onClick={onViewLocation}
-                className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium"
-              >
-                Get Location
-              </button>
-              {gpsData && gpsData.lat && gpsData.lng && (
-                <p className="text-xs text-gray-500 mt-2 text-center">
-                  Last: {gpsData.lat.toFixed(4)}, {gpsData.lng.toFixed(4)}
-                </p>
-              )}
+                className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium"
+                disabled={esp32bLoading}
+                onClick={() => sendMotorCommand('forward', motorSpeed)}
+              >Forward</button>
+              <button
+                className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium"
+                disabled={esp32bLoading}
+                onClick={() => sendMotorCommand('backward', motorSpeed)}
+              >Backward</button>
+              <button
+                className="px-3 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm font-medium"
+                disabled={esp32bLoading}
+                onClick={() => sendMotorCommand('stop', 0)}
+              >Stop</button>
+              <button
+                className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm font-medium"
+                disabled={esp32bLoading}
+                onClick={() => sendMotorCommand('test', 0)}
+              >Test</button>
+            </div>
+            <div className="flex items-center gap-2 mb-2">
+              <label className="text-xs font-medium text-gray-700">Speed:</label>
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={motorSpeed}
+                onChange={e => setMotorSpeed(Number(e.target.value))}
+                className="border px-2 py-1 rounded w-20 text-sm"
+              />
+              <span className="text-xs text-gray-500">(0–100)</span>
+            </div>
+            <div className="mt-2">
+              <div className="text-xs text-gray-700 font-medium mb-1">ESP32B Response:</div>
+              <div className="border rounded px-2 py-2 bg-gray-50 min-h-[32px] text-sm">
+                {esp32bLoading ? <span className="text-gray-400">Waiting for response...</span> : esp32bResponse || <span className="text-gray-400">No response yet</span>}
+              </div>
             </div>
           </div>
         </div>
