@@ -300,7 +300,7 @@ export function ControlPanel(props: ControlPanelProps) {
                 type="text"
                 value={esp32bIp}
                 onChange={e => setEsp32bIp(e.target.value)}
-                className="border px-2 py-1 rounded w-48 text-sm"
+                className="border px-2 py-1 rounded w-48 text-sm text-black"
                 placeholder="192.168.1.45"
                 autoComplete="off"
               />
@@ -335,7 +335,7 @@ export function ControlPanel(props: ControlPanelProps) {
                 max={100}
                 value={motorSpeed}
                 onChange={e => setMotorSpeed(Number(e.target.value))}
-                className="border px-2 py-1 rounded w-20 text-sm"
+                className="border px-2 py-1 rounded w-20 text-sm text-black"
               />
               <span className="text-xs text-gray-500">(0–100)</span>
             </div>

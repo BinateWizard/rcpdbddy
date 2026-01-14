@@ -123,14 +123,17 @@ export default function DeviceDetail() {
   }, [deviceId]);
 
 
-  // Listen to relay states from new RTDB path: devices/{deviceId}/nodes/ESP32A/relays/{i}
+  // Listen to relay states from both possible RTDB paths for compatibility
   useEffect(() => {
     if (!deviceId) return;
 
     const unsubscribes: (() => void)[] = [];
     for (let i = 1; i <= 4; i++) {
-      const relayRef = ref(database, `devices/${deviceId}/nodes/ESP32A/relays/${i}`);
-      const unsubscribe = onValue(relayRef, (snapshot) => {
+      // Listen to both possible relay state paths
+      const relayRef1 = ref(database, `devices/${deviceId}/nodes/ESP32A/relays/${i}`);
+      const relayRef2 = ref(database, `devices/${deviceId}/relays/${i}`);
+
+      const handler = (snapshot: any) => {
         if (snapshot.exists()) {
           const relayData = snapshot.val();
           const state = relayData.state === 'ON' || relayData.state === 'on' || relayData.state === true;
@@ -140,8 +143,11 @@ export default function DeviceDetail() {
             return newStates;
           });
         }
-      });
-      unsubscribes.push(unsubscribe);
+      };
+
+      const unsub1 = onValue(relayRef1, handler);
+      const unsub2 = onValue(relayRef2, handler);
+      unsubscribes.push(unsub1, unsub2);
     }
 
     return () => unsubscribes.forEach(unsub => unsub());
@@ -208,40 +214,30 @@ export default function DeviceDetail() {
   useEffect(() => {
     if (!deviceId) return;
 
-    const unsubscribe = onDeviceValue(deviceId, 'npk', (data) => {
+    // Listen to the full npk_readings map for this device
+    const unsubscribe = onDeviceValue(deviceId, 'npk_readings', (data) => {
       if (!data) return;
-      
-      // Use ESP32 timestamp if valid (in milliseconds), otherwise use current time
-      const timestamp = data.timestamp && data.timestamp > 1700000000000 
-        ? new Date(data.timestamp) 
-        : new Date();
-      
-      // Only add if we have actual NPK values
-      if (data.n !== undefined || data.p !== undefined || data.k !== undefined) {
-        const newLog = {
-          id: `rtdb-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          timestamp,
-          nitrogen: data.n,
-          phosphorus: data.p,
-          potassium: data.k,
-          _src: 'rtdb'
-        };
-        
-        setRealtimeLogs(prev => {
-          // Dedupe by NPK values (same n, p, k = same reading)
-          const lastLog = prev[prev.length - 1];
-          const isDuplicate = lastLog && 
-            lastLog.nitrogen === data.n && 
-            lastLog.phosphorus === data.p && 
-            lastLog.potassium === data.k;
-          
-          if (isDuplicate) return prev;
-          
-          // Keep only last 10 real-time entries
-          const updated = [...prev, newLog].slice(-10);
-          return updated;
-        });
-      }
+
+      // data is an object: { [timestamp]: { N, P, K, ... } }
+      const logs = Object.entries(data)
+        .map(([ts, val]: [string, any]) => {
+          // Parse timestamp as number (RTDB keys are string)
+          const timestamp = val.timestamp
+            ? new Date(typeof val.timestamp === 'number' ? val.timestamp * (val.timestamp < 1e12 ? 1000 : 1) : Date.now())
+            : new Date(Number(ts) * (Number(ts) < 1e12 ? 1000 : 1));
+          return {
+            id: `rtdb-${ts}`,
+            timestamp,
+            nitrogen: val.N,
+            phosphorus: val.P,
+            potassium: val.K,
+            _src: 'rtdb',
+          };
+        })
+        .filter(log => log.nitrogen !== undefined || log.phosphorus !== undefined || log.potassium !== undefined)
+        .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+      setRealtimeLogs(logs);
     });
 
     return () => unsubscribe();

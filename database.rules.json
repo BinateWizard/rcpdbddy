@@ -78,6 +78,17 @@
           ".read": "auth != null",
           ".write": "auth != null"
         },
+        // Nodes - allow authenticated users to send actions to ESP32A relays
+        "nodes": {
+          "$nodeId": {
+            "actions": {
+              "$actionType": {
+                ".read": "auth != null",
+                ".write": "auth != null"
+              }
+            }
+          }
+        },
         // Audit logs - authenticated users can write audit entries
         "audit": {
           ".read": "auth != null",
