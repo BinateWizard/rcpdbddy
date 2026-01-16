@@ -3,7 +3,7 @@ import { Line } from 'react-chartjs-2';
 
 interface TrendsChartProps {
   logs: Array<{
-    timestamp: Date;
+    timestamp: Date | number;
     nitrogen?: number;
     phosphorus?: number;
     potassium?: number;
@@ -13,13 +13,25 @@ interface TrendsChartProps {
 export function TrendsChart({ logs }: TrendsChartProps) {
   const data = useMemo(() => {
     // Ensure chronological order (oldest → newest)
-    const ordered = [...logs].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-    const labels = ordered.map((l) => l.timestamp.toLocaleString(undefined, { 
-      month: 'short', 
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    }));
+    const ordered = [...logs].sort((a, b) => {
+      const aTime = typeof a.timestamp === 'number' ? a.timestamp : a.timestamp?.getTime?.() || 0;
+      const bTime = typeof b.timestamp === 'number' ? b.timestamp : b.timestamp?.getTime?.() || 0;
+      return aTime - bTime;
+    });
+    const labels = ordered.map((l) => {
+      let dateObj: Date;
+      if (typeof l.timestamp === 'number') {
+        dateObj = new Date(l.timestamp < 1e12 ? l.timestamp * 1000 : l.timestamp);
+      } else {
+        dateObj = l.timestamp;
+      }
+      return dateObj.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    });
 
     return {
       labels,

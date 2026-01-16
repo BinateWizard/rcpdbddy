@@ -40,12 +40,13 @@ export function DataTrends({
   const allLogs = [...historicalLogs, ...realtimeLogs];
   const seen = new Set<string>();
   const deduped = allLogs.filter(log => {
-    const key = `${log.timestamp?.getTime?.()}-${log.nitrogen}-${log.phosphorus}-${log.potassium}`;
+    // Use numeric timestamp for key
+    const key = `${typeof log.timestamp === 'number' ? log.timestamp : log.timestamp?.getTime?.()}-${log.nitrogen}-${log.phosphorus}-${log.potassium}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-  const sortedLogs = deduped.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  const sortedLogs = deduped.sort((a, b) => (typeof b.timestamp === 'number' ? b.timestamp : b.timestamp?.getTime?.() || 0) - (typeof a.timestamp === 'number' ? a.timestamp : a.timestamp?.getTime?.() || 0));
   const chartLogs = sortedLogs.slice().reverse().slice(-10);
 
   // Pagination

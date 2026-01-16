@@ -55,6 +55,7 @@ export default function DeviceDetail() {
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d' | 'all'>('7d');
   const [historicalLogs, setHistoricalLogs] = useState<any[]>([]);
   const [realtimeLogs, setRealtimeLogs] = useState<any[]>([]);
+  const [latestRtdbNpkReading, setLatestRtdbNpkReading] = useState<any>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState<any>(null);
   const [paddyInfo, setPaddyInfo] = useState<any>(null);
@@ -223,21 +224,39 @@ export default function DeviceDetail() {
         .map(([ts, val]: [string, any]) => {
           // Parse timestamp as number (RTDB keys are string)
           const timestamp = val.timestamp
-            ? new Date(typeof val.timestamp === 'number' ? val.timestamp * (val.timestamp < 1e12 ? 1000 : 1) : Date.now())
-            : new Date(Number(ts) * (Number(ts) < 1e12 ? 1000 : 1));
+            ? (typeof val.timestamp === 'number' ? val.timestamp : Number(ts))
+            : Number(ts);
           return {
             id: `rtdb-${ts}`,
             timestamp,
-            nitrogen: val.N,
-            phosphorus: val.P,
-            potassium: val.K,
+            N: val.N,
+            P: val.P,
+            K: val.K,
+            areaHa: val.areaHa,
+            unit: val.unit,
             _src: 'rtdb',
           };
         })
-        .filter(log => log.nitrogen !== undefined || log.phosphorus !== undefined || log.potassium !== undefined)
-        .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+        .filter(log => log.N !== undefined || log.P !== undefined || log.K !== undefined);
 
-      setRealtimeLogs(logs);
+      // Find the log with the highest timestamp (latest)
+      let latest = null;
+      if (logs.length > 0) {
+        latest = logs.reduce((a, b) => (a.timestamp > b.timestamp ? a : b));
+      }
+      // Always provide all logs to Data Trends, sorted descending (latest first)
+      setRealtimeLogs(
+        logs
+          .map(log => ({
+            ...log,
+            // For Data Trends compatibility, add nitrogen, phosphorus, potassium fields
+            nitrogen: log.N,
+            phosphorus: log.P,
+            potassium: log.K,
+          }))
+          .sort((a, b) => b.timestamp - a.timestamp)
+      );
+      setLatestRtdbNpkReading(latest);
     });
 
     return () => unsubscribe();
@@ -1002,7 +1021,7 @@ export default function DeviceDetail() {
 
           {/* Sensor Readings Component (Current Readings) */}
           <SensorReadings
-            paddyLiveData={paddyLiveData}
+            rtdbNpkReading={latestRtdbNpkReading}
             weatherData={weatherData}
             npkGoal={npkGoal}
           />
